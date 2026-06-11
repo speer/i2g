@@ -43,7 +43,8 @@ func main() {
 
 	flag.StringVar(&ingressClass, "ingress-class", "",
 		"Name of the IngressClass to reconcile. Ingresses with a different class (spec.ingressClassName "+
-			"or the legacy kubernetes.io/ingress.class annotation) are ignored. Required.")
+			"or the legacy kubernetes.io/ingress.class annotation) are ignored. Empty considers all "+
+			"Ingresses regardless of their class.")
 	flag.StringVar(&namespaceSelector, "namespace-selector", "",
 		"Label selector restricting the namespaces whose Ingresses are reconciled, "+
 			"e.g. 'team=platform,env in (prod,staging)'. Empty selects all namespaces.")
@@ -76,10 +77,6 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 	setupLog := ctrl.Log.WithName("setup")
 
-	if ingressClass == "" {
-		setupLog.Error(nil, "--ingress-class is required")
-		os.Exit(1)
-	}
 	if gatewayName == "" {
 		setupLog.Error(nil, "--gateway-name is required")
 		os.Exit(1)

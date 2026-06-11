@@ -177,6 +177,10 @@ func (r *IngressReconciler) ingressMatches(ctx context.Context, ing *netv1.Ingre
 }
 
 func (r *IngressReconciler) classMatches(ing *netv1.Ingress) bool {
+	// An empty IngressClass considers every Ingress regardless of its class.
+	if r.IngressClass == "" {
+		return true
+	}
 	if ing.Spec.IngressClassName != nil {
 		return *ing.Spec.IngressClassName == r.IngressClass
 	}

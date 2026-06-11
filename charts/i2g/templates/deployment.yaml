@@ -42,7 +42,9 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --ingress-class={{ required "controller.ingressClass is required" .Values.controller.ingressClass }}
+            {{- with .Values.controller.ingressClass }}
+            - --ingress-class={{ . }}
+            {{- end }}
             - --gateway-name={{ required "controller.gatewayName is required" .Values.controller.gatewayName }}
             {{- with .Values.controller.namespaceSelector }}
             - --namespace-selector={{ . }}

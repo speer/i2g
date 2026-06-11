@@ -46,7 +46,7 @@ fields it sets and converges drift automatically.
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--ingress-class` | yes | – | IngressClass to reconcile. Matched against `spec.ingressClassName`, falling back to the legacy `kubernetes.io/ingress.class` annotation. |
+| `--ingress-class` | no | all classes | IngressClass to reconcile. Matched against `spec.ingressClassName`, falling back to the legacy `kubernetes.io/ingress.class` annotation. Empty considers all Ingresses in the watched/selected namespaces regardless of their class. |
 | `--namespace-selector` | no | all namespaces | Label selector applied to **Namespace** labels, e.g. `team=platform,env in (prod,staging)`. Ingresses outside matching namespaces are ignored (and previously generated resources are removed when a namespace stops matching). Mutually exclusive with `--watch-namespaces`. |
 | `--watch-namespaces` | no | all namespaces | Comma-separated list of namespaces to watch/reconcile. Allows running with purely namespaced RBAC — in this mode the controller never reads Namespace objects. Mutually exclusive with `--namespace-selector`. |
 | `--gateway-name` | yes | – | Name of the Gateway the ListenerSets attach to and the HTTPRoutes reference as parent. |
@@ -208,7 +208,7 @@ helm install i2g oci://ghcr.io/speer/charts/i2g \
   --set controller.defaultClusterIssuer=letsencrypt-prod
 ```
 
-`controller.ingressClass` and `controller.gatewayName` are required; see
+`controller.gatewayName` is required; see
 [values.yaml](charts/i2g/values.yaml) for all options (namespace selector,
 listener ports, leader election, metrics, resources, …). RBAC and the
 ServiceAccount are created by the chart.

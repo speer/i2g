@@ -11,7 +11,8 @@ replicaCount: 1
 
 controller:
   # IngressClass to reconcile (spec.ingressClassName or the legacy
-  # kubernetes.io/ingress.class annotation). Required.
+  # kubernetes.io/ingress.class annotation). Empty considers all Ingresses
+  # regardless of their class.
   ingressClass: ""
   # Label selector restricting the namespaces whose Ingresses are reconciled,
   # e.g. "team=platform,env in (prod,staging)". Empty selects all namespaces.

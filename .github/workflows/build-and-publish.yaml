@@ -29,7 +29,6 @@ jobs:
       - name: Helm lint
         run: |
           helm lint charts/i2g \
-            --set controller.ingressClass=nginx \
             --set controller.gatewayName=gateway
 
   version_bump:
