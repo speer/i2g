@@ -1,0 +1,20 @@
+apiVersion: v2
+name: i2g
+description: >-
+  Kubernetes controller translating Ingress resources of a configurable
+  IngressClass into Gateway API ListenerSets and HTTPRoutes attached to a
+  shared Gateway.
+type: application
+home: https://github.com/speer/i2g
+sources:
+  - https://github.com/speer/i2g
+# version and appVersion are overridden at packaging time by CI
+# (helm package --version X --app-version X).
+version: 0.0.0
+appVersion: 0.0.0
+keywords:
+  - ingress
+  - gateway-api
+  - listenerset
+  - httproute
+  - cert-manager

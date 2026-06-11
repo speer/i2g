@@ -1,0 +1,112 @@
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.controller.leaderElection) }}
+{{- fail "replicaCount > 1 requires controller.leaderElection=true, otherwise multiple active controllers fight over the same resources" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "i2g.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "i2g.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "i2g.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "i2g.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "i2g.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --ingress-class={{ required "controller.ingressClass is required" .Values.controller.ingressClass }}
+            - --gateway-name={{ required "controller.gatewayName is required" .Values.controller.gatewayName }}
+            {{- with .Values.controller.namespaceSelector }}
+            - --namespace-selector={{ . }}
+            {{- end }}
+            {{- with include "i2g.watchNamespaces" . }}
+            - --watch-namespaces={{ . }}
+            {{- end }}
+            {{- with .Values.controller.gatewayNamespace }}
+            - --gateway-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.controller.defaultClusterIssuer }}
+            - --default-cluster-issuer={{ . }}
+            {{- end }}
+            - --listener-https-port={{ .Values.controller.listenerHttpsPort }}
+            - --listener-http-port={{ .Values.controller.listenerHttpPort }}
+            {{- if .Values.controller.leaderElection }}
+            - --leader-elect
+            {{- end }}
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address={{ if .Values.metrics.enabled }}:{{ .Values.metrics.port }}{{ else }}0{{ end }}
+            - --zap-log-level={{ .Values.controller.logLevel }}
+            {{- range .Values.controller.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          ports:
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+            - name: probes
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

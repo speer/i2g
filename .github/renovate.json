@@ -1,0 +1,99 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "assignees": [
+    "@speer"
+  ],
+  "gitAuthor": "speer Bot <136696859+speer-bot[bot]@users.noreply.github.com>",
+  "semanticCommits": "enabled",
+  "labels": [
+    "renovatebot"
+  ],
+  "commitBody": "Signed-Off-by: Stefan Peer <stefan@peerweb.it>",
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate Dashboard",
+  "minimumReleaseAge": "1 days",
+  "suppressNotifications": [
+    "prIgnoreNotification"
+  ],
+  "rebaseWhen": "behind-base-branch",
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "dep/major"
+      ]
+    },
+    {
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "addLabels": [
+        "dep/minor"
+      ]
+    },
+    {
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "addLabels": [
+        "dep/patch"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Ship base image digest updates as patch releases",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest"
+      ],
+      "semanticCommitType": "fix",
+      "minimumReleaseAge": "0 days",
+      "automerge": true
+    },
+    {
+      "description": "Keep the go directive in go.mod and the golang base image in sync",
+      "matchDepNames": [
+        "go",
+        "golang"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "groupName": "golang toolchain"
+    },
+    {
+      "description": "Kubernetes libraries move in lockstep, update them together",
+      "matchDatasources": [
+        "go"
+      ],
+      "groupName": "kubernetes go dependencies",
+      "matchPackageNames": [
+        "k8s.io/api",
+        "k8s.io/apimachinery",
+        "k8s.io/client-go",
+        "sigs.k8s.io/controller-runtime"
+      ]
+    },
+    {
+      "matchPackageNames": [
+        "renovatebot/github-action"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
+      "minimumReleaseAge": "0 days",
+      "automerge": true
+    }
+  ]
+}

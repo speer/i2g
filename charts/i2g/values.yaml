@@ -1,0 +1,87 @@
+image:
+  repository: ghcr.io/speer/i2g
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Run more than one replica only together with controller.leaderElection.
+replicaCount: 1
+
+controller:
+  # IngressClass to reconcile (spec.ingressClassName or the legacy
+  # kubernetes.io/ingress.class annotation). Required.
+  ingressClass: ""
+  # Label selector restricting the namespaces whose Ingresses are reconciled,
+  # e.g. "team=platform,env in (prod,staging)". Empty selects all namespaces.
+  # Mutually exclusive with watchNamespaces and rbac.namespaced.
+  namespaceSelector: ""
+  # Name of the Gateway the generated ListenerSets attach to. Required.
+  gatewayName: ""
+  # Namespace of that Gateway. Empty assumes the Ingress namespace.
+  gatewayNamespace: ""
+  # Value for the cert-manager.io/cluster-issuer annotation on generated
+  # ListenerSets when the Ingress has kubernetes.io/tls-acme="true" but no
+  # issuer annotation.
+  defaultClusterIssuer: ""
+  # Ports of the generated HTTPS and plain HTTP listeners.
+  listenerHttpsPort: 443
+  listenerHttpPort: 80
+  # Namespaces to watch. Empty watches all namespaces. Defaults to the
+  # release namespace when rbac.namespaced is true. Mutually exclusive
+  # with namespaceSelector.
+  watchNamespaces: []
+  # Enable leader election (required for replicaCount > 1).
+  leaderElection: false
+  # zap log level: debug, info, error.
+  logLevel: info
+  # Additional command line arguments.
+  extraArgs: []
+
+serviceAccount:
+  create: true
+  # Defaults to the fullname of the release.
+  name: ""
+  annotations: {}
+
+rbac:
+  # Create RBAC resources (and, with leaderElection, the leases
+  # Role/RoleBinding).
+  create: true
+  # With false (default), the controller may read Ingresses/Services and
+  # manage ListenerSets/HTTPRoutes in all namespaces
+  # (ClusterRole/ClusterRoleBinding). With true, no cluster-wide permissions
+  # are granted at all: a Role/RoleBinding is created in every watched
+  # namespace (controller.watchNamespaces, defaulting to the release
+  # namespace) and the controller only watches those namespaces.
+  namespaced: false
+
+metrics:
+  enabled: true
+  port: 8080
+  serviceMonitor:
+    # Create a ServiceMonitor for the metrics Service. Requires the
+    # Prometheus Operator CRDs (monitoring.coreos.com).
+    enabled: false
+    # Extra labels, e.g. to match the Prometheus serviceMonitorSelector.
+    additionalLabels: {}
+    # Scrape interval/timeout; empty uses the Prometheus defaults.
+    interval: ""
+    scrapeTimeout: ""
+    relabelings: []
+    metricRelabelings: []
+
+resources: {}
+  # requests:
+  #   cpu: 10m
+  #   memory: 64Mi
+  # limits:
+  #   memory: 128Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
