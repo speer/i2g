@@ -33,6 +33,11 @@ controller:
   # release namespace when rbac.namespaced is true. Mutually exclusive
   # with namespaceSelector.
   watchNamespaces: []
+  # Mirror the Gateway's addresses into status.loadBalancer of reconciled
+  # Ingresses (for external-dns, kubectl, ...). Enable only once the
+  # original ingress controller no longer manages the Ingresses, otherwise
+  # both fight over the status.
+  updateIngressStatus: false
   # Enable leader election (required for replicaCount > 1).
   leaderElection: false
   # zap log level: debug, info, error.

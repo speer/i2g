@@ -4,7 +4,30 @@ import (
 	"testing"
 
 	netv1 "k8s.io/api/networking/v1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+func TestIngressLoadBalancerEntries(t *testing.T) {
+	addrType := func(t gatewayv1.AddressType) *gatewayv1.AddressType { return &t }
+	entries := ingressLoadBalancerEntries([]gatewayv1.GatewayStatusAddress{
+		{Type: addrType(gatewayv1.IPAddressType), Value: "192.0.2.10"},
+		{Type: addrType(gatewayv1.HostnameAddressType), Value: "lb.example.com"},
+		{Value: "192.0.2.11"}, // no type defaults to IP
+		{Type: addrType(gatewayv1.NamedAddressType), Value: "named"}, // no Ingress equivalent
+	})
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+	if entries[0].IP == nil || *entries[0].IP != "192.0.2.10" {
+		t.Errorf("entry 0 = %+v, want IP 192.0.2.10", entries[0])
+	}
+	if entries[1].Hostname == nil || *entries[1].Hostname != "lb.example.com" {
+		t.Errorf("entry 1 = %+v, want hostname lb.example.com", entries[1])
+	}
+	if entries[2].IP == nil || *entries[2].IP != "192.0.2.11" {
+		t.Errorf("entry 2 = %+v, want IP 192.0.2.11", entries[2])
+	}
+}
 
 func TestIngressReferencesService(t *testing.T) {
 	ing := newIngress()

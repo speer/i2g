@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
@@ -11,9 +12,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	netv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -42,10 +45,13 @@ type IngressReconciler struct {
 	DefaultClusterIssuer string
 	ListenerHTTPSPort    int32
 	ListenerHTTPPort     int32
+	UpdateIngressStatus  bool
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses/status,verbs=patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets;httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services;namespaces,verbs=get;list;watch
 
 func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -67,8 +73,15 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	if !matches {
 		// The Ingress changed class or its namespace no longer matches:
-		// remove anything we created for it earlier.
-		return ctrl.Result{}, r.deleteGenerated(ctx, ing, nil)
+		// remove anything we created for it earlier, including our
+		// ownership of status fields.
+		if err := r.deleteGenerated(ctx, ing, nil); err != nil {
+			return ctrl.Result{}, err
+		}
+		if r.UpdateIngressStatus {
+			return ctrl.Result{}, r.applyIngressStatus(ctx, ing, nil)
+		}
+		return ctrl.Result{}, nil
 	}
 
 	opts := buildOptions{
@@ -108,8 +121,70 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	if r.UpdateIngressStatus {
+		if err := r.syncIngressStatus(ctx, ing); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating Ingress status: %w", err)
+		}
+	}
+
 	log.V(1).Info("reconciled", "httpRoutes", len(routes), "listenerSet", listenerSet != nil)
 	return ctrl.Result{}, nil
+}
+
+// syncIngressStatus mirrors the Gateway's addresses into the Ingress
+// status.loadBalancer so that consumers like external-dns and kubectl keep
+// working after the original ingress controller is gone.
+func (r *IngressReconciler) syncIngressStatus(ctx context.Context, ing *netv1.Ingress) error {
+	gatewayNamespace := r.GatewayNamespace
+	if gatewayNamespace == "" {
+		gatewayNamespace = ing.Namespace
+	}
+	gateway := &gatewayv1.Gateway{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: gatewayNamespace, Name: r.GatewayName}, gateway)
+	switch {
+	case apierrors.IsNotFound(err):
+		// No Gateway, no addresses; clear what we own. The Gateway watch
+		// re-triggers once it appears.
+		logf.FromContext(ctx).Info("gateway not found, clearing Ingress load balancer status",
+			"gateway", gatewayNamespace+"/"+r.GatewayName)
+		return r.applyIngressStatus(ctx, ing, nil)
+	case err != nil:
+		return err
+	}
+	return r.applyIngressStatus(ctx, ing, ingressLoadBalancerEntries(gateway.Status.Addresses))
+}
+
+// applyIngressStatus server-side applies the load balancer entries to the
+// Ingress status. nil entries release the fields this controller owns
+// without touching anything written by other managers.
+func (r *IngressReconciler) applyIngressStatus(ctx context.Context, ing *netv1.Ingress, entries []*netv1ac.IngressLoadBalancerIngressApplyConfiguration) error {
+	status := netv1ac.IngressStatus()
+	if len(entries) > 0 {
+		status = status.WithLoadBalancer(netv1ac.IngressLoadBalancerStatus().WithIngress(entries...))
+	}
+	return r.Status().Apply(ctx,
+		netv1ac.Ingress(ing.Name, ing.Namespace).WithStatus(status),
+		client.FieldOwner(fieldManager), client.ForceOwnership)
+}
+
+// ingressLoadBalancerEntries converts Gateway status addresses to Ingress
+// load balancer entries. Address types other than IP and Hostname have no
+// Ingress equivalent and are skipped.
+func ingressLoadBalancerEntries(addresses []gatewayv1.GatewayStatusAddress) []*netv1ac.IngressLoadBalancerIngressApplyConfiguration {
+	var entries []*netv1ac.IngressLoadBalancerIngressApplyConfiguration
+	for _, addr := range addresses {
+		addrType := gatewayv1.IPAddressType
+		if addr.Type != nil {
+			addrType = *addr.Type
+		}
+		switch addrType {
+		case gatewayv1.IPAddressType:
+			entries = append(entries, netv1ac.IngressLoadBalancerIngress().WithIP(addr.Value))
+		case gatewayv1.HostnameAddressType:
+			entries = append(entries, netv1ac.IngressLoadBalancerIngress().WithHostname(addr.Value))
+		}
+	}
+	return entries
 }
 
 // deleteGenerated removes resources previously generated for the Ingress.
@@ -261,6 +336,51 @@ func (r *IngressReconciler) ingressesForNamespace(ctx context.Context, obj clien
 	return reqs
 }
 
+// ingressesForGateway enqueues all matching Ingresses when the configured
+// Gateway's addresses change, so their status stays in sync.
+func (r *IngressReconciler) ingressesForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetName() != r.GatewayName {
+		return nil
+	}
+	var listOpts []client.ListOption
+	if r.GatewayNamespace != "" {
+		if obj.GetNamespace() != r.GatewayNamespace {
+			return nil
+		}
+	} else {
+		// Without a fixed Gateway namespace the Gateway serves the
+		// Ingresses of its own namespace.
+		listOpts = append(listOpts, client.InNamespace(obj.GetNamespace()))
+	}
+	ingList := &netv1.IngressList{}
+	if err := r.List(ctx, ingList, listOpts...); err != nil {
+		logf.FromContext(ctx).Error(err, "listing Ingresses for Gateway", "gateway", obj.GetName())
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range ingList.Items {
+		ing := &ingList.Items[i]
+		if r.classMatches(ing) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ing)})
+		}
+	}
+	return reqs
+}
+
+// gatewayAddressesChanged filters Gateway events down to address changes.
+func gatewayAddressesChanged() predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldGw, okOld := e.ObjectOld.(*gatewayv1.Gateway)
+			newGw, okNew := e.ObjectNew.(*gatewayv1.Gateway)
+			if !okOld || !okNew {
+				return true
+			}
+			return !reflect.DeepEqual(oldGw.Status.Addresses, newGw.Status.Addresses)
+		},
+	}
+}
+
 func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named("ingress2gateway").
@@ -276,6 +396,11 @@ func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		b = b.Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(r.ingressesForNamespace),
 			builder.WithPredicates(predicate.LabelChangedPredicate{}))
+	}
+	if r.UpdateIngressStatus {
+		b = b.Watches(&gatewayv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.ingressesForGateway),
+			builder.WithPredicates(gatewayAddressesChanged()))
 	}
 	return b.Complete(r)
 }

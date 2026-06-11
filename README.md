@@ -52,6 +52,7 @@ fields it sets and converges drift automatically.
 | `--gateway-name` | yes | – | Name of the Gateway the ListenerSets attach to and the HTTPRoutes reference as parent. |
 | `--gateway-namespace` | no | Ingress namespace | Namespace of that Gateway. |
 | `--default-cluster-issuer` | no | – | Value for `cert-manager.io/cluster-issuer` on the ListenerSet when the Ingress has `kubernetes.io/tls-acme: "true"` but no issuer annotation. |
+| `--update-ingress-status` | no | `false` | Mirror the Gateway's `status.addresses` into `status.loadBalancer` of reconciled Ingresses so consumers like external-dns and `kubectl get ingress` keep working. Enable only once the original ingress controller no longer manages the Ingresses — two controllers writing the status fight each other. |
 | `--listener-https-port` | no | `443` | Port of the generated HTTPS listeners. |
 | `--listener-http-port` | no | `80` | Port of the generated plain HTTP listeners (e.g. for ACME HTTP-01 challenges). |
 | `--metrics-bind-address` | no | `:8080` | Metrics endpoint (`0` disables). |

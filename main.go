@@ -11,6 +11,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -36,6 +37,7 @@ func main() {
 		defaultClusterIssuer string
 		listenerHTTPSPort    int
 		listenerHTTPPort     int
+		updateIngressStatus  bool
 		metricsAddr          string
 		probeAddr            string
 		enableLeaderElection bool
@@ -63,6 +65,10 @@ func main() {
 		"Port the generated HTTPS listeners bind to.")
 	flag.IntVar(&listenerHTTPPort, "listener-http-port", 80,
 		"Port the generated plain HTTP listeners bind to (used e.g. for ACME HTTP-01 challenges).")
+	flag.BoolVar(&updateIngressStatus, "update-ingress-status", false,
+		"Mirror the Gateway's addresses into the status.loadBalancer of reconciled Ingresses (for "+
+			"external-dns, kubectl, ...). Enable only once the original ingress controller no longer "+
+			"manages the Ingresses, otherwise both fight over the status.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080",
 		"Address the metrics endpoint binds to. Use '0' to disable.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081",
@@ -129,6 +135,21 @@ func main() {
 			}
 		}
 		managerOpts.Cache = cache.Options{DefaultNamespaces: namespaces}
+
+		// Status writeback reads the Gateway, which may live outside the
+		// watched namespaces. Scope only the Gateway informer to it so the
+		// watched set for everything else stays untouched.
+		if updateIngressStatus && gatewayNamespace != "" {
+			if _, ok := namespaces[gatewayNamespace]; !ok {
+				gatewayNamespaces := map[string]cache.Config{gatewayNamespace: {}}
+				for ns, cfg := range namespaces {
+					gatewayNamespaces[ns] = cfg
+				}
+				managerOpts.Cache.ByObject = map[client.Object]cache.ByObject{
+					&gatewayv1.Gateway{}: {Namespaces: gatewayNamespaces},
+				}
+			}
+		}
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), managerOpts)
@@ -147,6 +168,7 @@ func main() {
 		DefaultClusterIssuer: defaultClusterIssuer,
 		ListenerHTTPSPort:    int32(listenerHTTPSPort),
 		ListenerHTTPPort:     int32(listenerHTTPPort),
+		UpdateIngressStatus:  updateIngressStatus,
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Ingress")

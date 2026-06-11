@@ -60,6 +60,9 @@ spec:
             {{- end }}
             - --listener-https-port={{ .Values.controller.listenerHttpsPort }}
             - --listener-http-port={{ .Values.controller.listenerHttpPort }}
+            {{- if .Values.controller.updateIngressStatus }}
+            - --update-ingress-status
+            {{- end }}
             {{- if .Values.controller.leaderElection }}
             - --leader-elect
             {{- end }}
