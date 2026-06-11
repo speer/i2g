@@ -215,6 +215,10 @@ spec:
   hostname/listener mismatch, backend Service gone). This catches
   "translated but not actually serving". `Unknown` conditions are ignored;
   they only mean the implementation has not processed the resource yet.
+- **Opting out**: annotate an Ingress with `i2g.dev/skip: "true"` to exclude
+  it from translation; previously generated resources (and, with
+  `--update-ingress-status`, the controller's status ownership) are cleaned
+  up. Removing the annotation re-translates it.
 - **Ownership & cleanup**: generated resources carry an owner reference to
   the Ingress (deleting the Ingress garbage-collects them) and the
   `app.kubernetes.io/managed-by: ingress2gateway` label. HTTPRoutes for hosts

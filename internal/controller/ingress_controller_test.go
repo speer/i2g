@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -82,6 +84,24 @@ func TestIngressLoadBalancerEntries(t *testing.T) {
 	}
 	if entries[2].IP == nil || *entries[2].IP != "192.0.2.11" {
 		t.Errorf("entry 2 = %+v, want IP 192.0.2.11", entries[2])
+	}
+}
+
+func TestSkipAnnotation(t *testing.T) {
+	r := &IngressReconciler{NamespaceSelector: labels.Everything()}
+
+	for value, wantMatch := range map[string]bool{"true": false, "false": true, "": true} {
+		ing := newIngress()
+		if value != "" {
+			ing.Annotations = map[string]string{skipAnnotation: value}
+		}
+		match, err := r.ingressMatches(context.Background(), ing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if match != wantMatch {
+			t.Errorf("ingressMatches with skip=%q = %v, want %v", value, match, wantMatch)
+		}
 	}
 }
 

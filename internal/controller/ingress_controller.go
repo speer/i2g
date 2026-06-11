@@ -31,6 +31,10 @@ const (
 	// legacyIngressClassAnnotation predates spec.ingressClassName and is
 	// still widely used.
 	legacyIngressClassAnnotation = "kubernetes.io/ingress.class"
+
+	// skipAnnotation excludes an individual Ingress from translation;
+	// previously generated resources are cleaned up.
+	skipAnnotation = "i2g.dev/skip"
 )
 
 // IngressReconciler translates Ingress resources of a given class into
@@ -349,10 +353,17 @@ func ownedBy(obj client.Object, ing *netv1.Ingress) bool {
 	return owner != nil && owner.UID == ing.UID
 }
 
-// ingressMatches reports whether the Ingress belongs to the configured class
-// and lives in a namespace matched by the namespace selector.
+// skipped reports whether the Ingress opted out of translation via the skip
+// annotation.
+func skipped(ing *netv1.Ingress) bool {
+	return ing.Annotations[skipAnnotation] == "true"
+}
+
+// ingressMatches reports whether the Ingress belongs to the configured class,
+// lives in a namespace matched by the namespace selector, and has not opted
+// out via the skip annotation.
 func (r *IngressReconciler) ingressMatches(ctx context.Context, ing *netv1.Ingress) (bool, error) {
-	if !r.classMatches(ing) {
+	if skipped(ing) || !r.classMatches(ing) {
 		return false, nil
 	}
 	if r.NamespaceSelector.Empty() {
@@ -408,7 +419,7 @@ func (r *IngressReconciler) ingressesForService(ctx context.Context, obj client.
 	var reqs []reconcile.Request
 	for i := range ingList.Items {
 		ing := &ingList.Items[i]
-		if r.classMatches(ing) && ingressReferencesService(ing, obj.GetName()) {
+		if r.classMatches(ing) && !skipped(ing) && ingressReferencesService(ing, obj.GetName()) {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ing)})
 		}
 	}
@@ -443,7 +454,7 @@ func (r *IngressReconciler) ingressesForNamespace(ctx context.Context, obj clien
 	var reqs []reconcile.Request
 	for i := range ingList.Items {
 		ing := &ingList.Items[i]
-		if r.classMatches(ing) {
+		if r.classMatches(ing) && !skipped(ing) {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ing)})
 		}
 	}
@@ -474,7 +485,7 @@ func (r *IngressReconciler) ingressesForGateway(ctx context.Context, obj client.
 	var reqs []reconcile.Request
 	for i := range ingList.Items {
 		ing := &ingList.Items[i]
-		if r.classMatches(ing) {
+		if r.classMatches(ing) && !skipped(ing) {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ing)})
 		}
 	}
