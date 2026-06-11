@@ -29,18 +29,19 @@ func init() {
 
 func main() {
 	var (
-		ingressClass         string
-		namespaceSelector    string
-		watchNamespaces      string
-		gatewayName          string
-		gatewayNamespace     string
-		defaultClusterIssuer string
-		listenerHTTPSPort    int
-		listenerHTTPPort     int
-		updateIngressStatus  bool
-		metricsAddr          string
-		probeAddr            string
-		enableLeaderElection bool
+		ingressClass           string
+		namespaceSelector      string
+		watchNamespaces        string
+		gatewayName            string
+		gatewayNamespace       string
+		defaultClusterIssuer   string
+		listenerHTTPSPort      int
+		listenerHTTPPort       int
+		updateIngressStatus    bool
+		warnAnnotationPrefixes string
+		metricsAddr            string
+		probeAddr              string
+		enableLeaderElection   bool
 	)
 
 	flag.StringVar(&ingressClass, "ingress-class", "",
@@ -65,6 +66,11 @@ func main() {
 		"Port the generated HTTPS listeners bind to.")
 	flag.IntVar(&listenerHTTPPort, "listener-http-port", 80,
 		"Port the generated plain HTTP listeners bind to (used e.g. for ACME HTTP-01 challenges).")
+	flag.StringVar(&warnAnnotationPrefixes, "warn-annotation-prefixes",
+		"nginx.ingress.kubernetes.io/,ingress.kubernetes.io/",
+		"Comma-separated annotation prefixes that carried traffic semantics for the previous ingress "+
+			"controller. Untranslated annotations with these prefixes raise a warning Event on the "+
+			"Ingress. Empty disables the warnings.")
 	flag.BoolVar(&updateIngressStatus, "update-ingress-status", false,
 		"Mirror the Gateway's addresses into the status.loadBalancer of reconciled Ingresses (for "+
 			"external-dns, kubectl, ...). Enable only once the original ingress controller no longer "+
@@ -158,17 +164,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	var warnPrefixes []string
+	for prefix := range strings.SplitSeq(warnAnnotationPrefixes, ",") {
+		if prefix = strings.TrimSpace(prefix); prefix != "" {
+			warnPrefixes = append(warnPrefixes, prefix)
+		}
+	}
+
 	r := &controller.IngressReconciler{
-		Client:               mgr.GetClient(),
-		Scheme:               mgr.GetScheme(),
-		IngressClass:         ingressClass,
-		NamespaceSelector:    nsSelector,
-		GatewayName:          gatewayName,
-		GatewayNamespace:     gatewayNamespace,
-		DefaultClusterIssuer: defaultClusterIssuer,
-		ListenerHTTPSPort:    int32(listenerHTTPSPort),
-		ListenerHTTPPort:     int32(listenerHTTPPort),
-		UpdateIngressStatus:  updateIngressStatus,
+		Client:                 mgr.GetClient(),
+		Scheme:                 mgr.GetScheme(),
+		Recorder:               mgr.GetEventRecorderFor("ingress2gateway"),
+		IngressClass:           ingressClass,
+		NamespaceSelector:      nsSelector,
+		GatewayName:            gatewayName,
+		GatewayNamespace:       gatewayNamespace,
+		DefaultClusterIssuer:   defaultClusterIssuer,
+		ListenerHTTPSPort:      int32(listenerHTTPSPort),
+		ListenerHTTPPort:       int32(listenerHTTPPort),
+		UpdateIngressStatus:    updateIngressStatus,
+		WarnAnnotationPrefixes: warnPrefixes,
 	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Ingress")

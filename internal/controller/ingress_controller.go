@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	netv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,16 +37,18 @@ const (
 // Gateway API ListenerSets and HTTPRoutes.
 type IngressReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 
-	IngressClass         string
-	NamespaceSelector    labels.Selector
-	GatewayName          string
-	GatewayNamespace     string
-	DefaultClusterIssuer string
-	ListenerHTTPSPort    int32
-	ListenerHTTPPort     int32
-	UpdateIngressStatus  bool
+	IngressClass           string
+	NamespaceSelector      labels.Selector
+	GatewayName            string
+	GatewayNamespace       string
+	DefaultClusterIssuer   string
+	ListenerHTTPSPort      int32
+	ListenerHTTPPort       int32
+	UpdateIngressStatus    bool
+	WarnAnnotationPrefixes []string
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
@@ -53,6 +56,7 @@ type IngressReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets;httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services;namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -82,6 +86,14 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, r.applyIngressStatus(ctx, ing, nil)
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// Surface dropped constructs as warning Events on the Ingress; the
+	// recorder deduplicates repeats into a single event with a counter.
+	if r.Recorder != nil {
+		for _, warning := range translationWarnings(ing, r.WarnAnnotationPrefixes) {
+			r.Recorder.Event(ing, corev1.EventTypeWarning, warning.Reason, warning.Message)
+		}
 	}
 
 	opts := buildOptions{

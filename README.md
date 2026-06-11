@@ -52,6 +52,7 @@ fields it sets and converges drift automatically.
 | `--gateway-name` | yes | – | Name of the Gateway the ListenerSets attach to and the HTTPRoutes reference as parent. |
 | `--gateway-namespace` | no | Ingress namespace | Namespace of that Gateway. |
 | `--default-cluster-issuer` | no | – | Value for `cert-manager.io/cluster-issuer` on the ListenerSet when the Ingress has `kubernetes.io/tls-acme: "true"` but no issuer annotation. |
+| `--warn-annotation-prefixes` | no | `nginx.ingress.kubernetes.io/,ingress.kubernetes.io/` | Comma-separated annotation prefixes that carried traffic semantics for the previous ingress controller. Untranslated annotations with these prefixes raise a warning Event on the Ingress. Empty disables the warnings. |
 | `--update-ingress-status` | no | `false` | Mirror the Gateway's `status.addresses` into `status.loadBalancer` of reconciled Ingresses so consumers like external-dns and `kubectl get ingress` keep working. Enable only once the original ingress controller no longer manages the Ingresses — two controllers writing the status fight each other. |
 | `--listener-https-port` | no | `443` | Port of the generated HTTPS listeners. |
 | `--listener-http-port` | no | `80` | Port of the generated plain HTTP listeners (e.g. for ACME HTTP-01 challenges). |
@@ -165,7 +166,10 @@ spec:
 ### Rules of the translation
 
 - **pathType**: `Exact` → `Exact`; `Prefix`, `ImplementationSpecific`, and
-  unset all map to `PathPrefix`. An empty path becomes `/`.
+  unset all map to `PathPrefix`. An empty path becomes `/`. Path values pass
+  through unchanged: Gateway API's `PathPrefix` is spec-defined as
+  semantically equivalent to Ingress `Prefix` (element-wise matching,
+  trailing `/` ignored), and `Exact` is exact in both APIs.
 - **Named service ports** are resolved to numbers by reading the backend
   Service. Services are watched, so port renumbering re-renders the routes.
   An unresolvable port fails the reconcile and is retried with backoff.
@@ -194,6 +198,14 @@ spec:
   `cert-manager.io/cluster-issuer` nor `cert-manager.io/issuer` is present but
   `kubernetes.io/tls-acme: "true"` is, `cert-manager.io/cluster-issuer` is set
   to `--default-cluster-issuer`. No other annotations or labels are copied.
+- **Feedback on skipped constructs**: anything the translation drops —
+  non-Service backends, TLS entries without `secretName`, rules without an
+  `http` section, and untranslated annotations under the
+  `--warn-annotation-prefixes` namespaces — raises a warning **Event** on the
+  source Ingress (visible in `kubectl describe ingress`; repeats are
+  deduplicated into one event with a counter). Annotations outside those
+  prefixes (Helm, GitOps tooling, …) are ignored silently, as they carry no
+  traffic semantics. A clean Ingress emits nothing.
 - **Ownership & cleanup**: generated resources carry an owner reference to
   the Ingress (deleting the Ingress garbage-collects them) and the
   `app.kubernetes.io/managed-by: ingress2gateway` label. HTTPRoutes for hosts
@@ -205,6 +217,10 @@ spec:
 
 - `backend.resource` (non-Service backends)
 - Ingress rules without an `http` section
+- `spec.tls` entries without `secretName`: ingress controllers fall back to
+  their default certificate, which has no per-Ingress equivalent here. Such
+  entries are skipped — configure a catch-all HTTPS listener with a default
+  certificate on the shared Gateway instead if you need that behavior.
 
 ## Deploying
 

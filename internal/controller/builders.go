@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"maps"
+	"slices"
 	"strings"
 
 	netv1 "k8s.io/api/networking/v1"
@@ -410,4 +412,72 @@ func hashString(s string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(s))
 	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+// translationWarning describes a part of the Ingress the translation drops,
+// surfaced as a warning Event on the Ingress.
+type translationWarning struct {
+	Reason  string
+	Message string
+}
+
+// translationWarnings inspects the Ingress for constructs the translation
+// skips: non-Service backends, TLS entries without a Secret, rules without
+// an http section, and untranslated annotations of the configured
+// ingress-controller prefixes. Annotations outside those prefixes (Helm,
+// GitOps tooling, ...) never warn — they carry no traffic semantics.
+func translationWarnings(ing *netv1.Ingress, warnAnnotationPrefixes []string) []translationWarning {
+	var warnings []translationWarning
+
+	for i, rule := range ing.Spec.Rules {
+		if rule.HTTP == nil {
+			warnings = append(warnings, translationWarning{
+				Reason:  "SkippedRule",
+				Message: fmt.Sprintf("spec.rules[%d] (host %q) has no http section and was skipped", i, rule.Host),
+			})
+			continue
+		}
+		for _, path := range rule.HTTP.Paths {
+			if path.Backend.Service == nil {
+				warnings = append(warnings, translationWarning{
+					Reason:  "SkippedResourceBackend",
+					Message: fmt.Sprintf("spec.rules[%d] (host %q) path %q uses a non-Service backend and was skipped", i, rule.Host, path.Path),
+				})
+			}
+		}
+	}
+	if db := ing.Spec.DefaultBackend; db != nil && db.Service == nil {
+		warnings = append(warnings, translationWarning{
+			Reason:  "SkippedResourceBackend",
+			Message: "spec.defaultBackend uses a non-Service backend and was skipped",
+		})
+	}
+	for i, tls := range ing.Spec.TLS {
+		if tls.SecretName == "" {
+			warnings = append(warnings, translationWarning{
+				Reason:  "SkippedTLSEntry",
+				Message: fmt.Sprintf("spec.tls[%d] has no secretName and was skipped; configure a default certificate on the Gateway instead", i),
+			})
+		}
+	}
+
+	handled := map[string]bool{
+		sslRedirectAnnotation:       true,
+		sslRedirectAnnotationLegacy: true,
+	}
+	for _, key := range slices.Sorted(maps.Keys(ing.Annotations)) {
+		if handled[key] {
+			continue
+		}
+		for _, prefix := range warnAnnotationPrefixes {
+			if prefix != "" && strings.HasPrefix(key, prefix) {
+				warnings = append(warnings, translationWarning{
+					Reason:  "UnsupportedAnnotation",
+					Message: fmt.Sprintf("annotation %q is not translated; its behavior is dropped", key),
+				})
+				break
+			}
+		}
+	}
+	return warnings
 }

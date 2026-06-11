@@ -453,6 +453,46 @@ func TestBuildHTTPRoutesUnresolvablePortFails(t *testing.T) {
 	}
 }
 
+func TestTranslationWarnings(t *testing.T) {
+	prefixes := []string{"nginx.ingress.kubernetes.io/", "ingress.kubernetes.io/"}
+
+	ing := newIngress()
+	ing.Annotations = map[string]string{
+		"nginx.ingress.kubernetes.io/rewrite-target": "/",     // warns: untranslated traffic semantics
+		"nginx.ingress.kubernetes.io/ssl-redirect":   "false", // handled, no warning
+		"meta.helm.sh/release-name":                  "shop",  // tooling, no warning
+		"cert-manager.io/cluster-issuer":             "le",    // copied, no warning
+		"argocd.argoproj.io/tracking-id":             "x",     // tooling, no warning
+	}
+	ing.Spec.DefaultBackend = &netv1.IngressBackend{Resource: &corev1.TypedLocalObjectReference{Kind: "StorageBucket", Name: "assets"}}
+	ing.Spec.TLS = []netv1.IngressTLS{{Hosts: []string{"shop.example.com"}}} // no secretName
+	ing.Spec.Rules = []netv1.IngressRule{
+		{Host: "tcp.example.com"}, // no http section
+		{Host: "shop.example.com", IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{
+			{Path: "/assets", Backend: netv1.IngressBackend{Resource: &corev1.TypedLocalObjectReference{Kind: "StorageBucket", Name: "assets"}}},
+			{Path: "/", Backend: netv1.IngressBackend{Service: &netv1.IngressServiceBackend{Name: "ok", Port: netv1.ServiceBackendPort{Number: 80}}}},
+		}}}},
+	}
+
+	got := translationWarnings(ing, prefixes)
+	wantReasons := []string{"SkippedRule", "SkippedResourceBackend", "SkippedResourceBackend", "SkippedTLSEntry", "UnsupportedAnnotation"}
+	if len(got) != len(wantReasons) {
+		t.Fatalf("expected %d warnings, got %d: %+v", len(wantReasons), len(got), got)
+	}
+	for i, reason := range wantReasons {
+		if got[i].Reason != reason {
+			t.Errorf("warning %d reason = %s, want %s (%s)", i, got[i].Reason, reason, got[i].Message)
+		}
+	}
+	if !strings.Contains(got[4].Message, "rewrite-target") {
+		t.Errorf("annotation warning should name the annotation: %s", got[4].Message)
+	}
+
+	if ws := translationWarnings(newIngress(), prefixes); len(ws) != 0 {
+		t.Errorf("clean Ingress must produce no warnings, got %+v", ws)
+	}
+}
+
 func TestTLSCoversHost(t *testing.T) {
 	ing := newIngress()
 	ing.Spec.TLS = []netv1.IngressTLS{

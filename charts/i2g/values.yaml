@@ -33,6 +33,12 @@ controller:
   # release namespace when rbac.namespaced is true. Mutually exclusive
   # with namespaceSelector.
   watchNamespaces: []
+  # Annotation prefixes that carried traffic semantics for the previous
+  # ingress controller; untranslated annotations with these prefixes raise a
+  # warning Event on the Ingress. Unset keeps the controller default
+  # (nginx.ingress.kubernetes.io/, ingress.kubernetes.io/). Pass an explicit
+  # list to override, e.g. for Traefik or HAProxy annotation namespaces.
+  warnAnnotationPrefixes: []
   # Mirror the Gateway's addresses into status.loadBalancer of reconciled
   # Ingresses (for external-dns, kubectl, ...). Enable only once the
   # original ingress controller no longer manages the Ingresses, otherwise
