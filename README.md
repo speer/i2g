@@ -174,6 +174,15 @@ spec:
   without `secretName` are skipped. HTTPRoutes for hosts covered by TLS
   (exact or single-label wildcard match) additionally attach to the
   ListenerSet.
+- **HTTPS redirect**: hosts covered by `spec.tls` answer plain HTTP with a
+  permanent (308) redirect to HTTPS, like ingress-nginx: the app route is
+  pinned to the host's HTTPS listener (`sectionName`) and a separate
+  generated `<route>-redirect` HTTPRoute with a `RequestRedirect` filter
+  attaches to the HTTP listener. Set
+  `nginx.ingress.kubernetes.io/ssl-redirect: "false"` (or the legacy
+  `ingress.kubernetes.io/ssl-redirect`) on the Ingress to serve the
+  application on both protocols instead. ACME HTTP-01 keeps working: solver
+  routes match a more specific path than the redirect's `/` prefix.
 - **`spec.defaultBackend`** becomes a hostname-less `PathPrefix /` rule with
   the lowest matching precedence: Gateway API prefers routes with more
   specific hostnames and paths, and within the shared catch-all route the

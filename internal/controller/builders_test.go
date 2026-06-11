@@ -223,8 +223,10 @@ func TestBuildHTTPRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(routes))
+	// App route + HTTPS redirect route for the TLS host, app route for the
+	// plain host.
+	if len(routes) != 3 {
+		t.Fatalf("expected 3 routes, got %d", len(routes))
 	}
 
 	shop := routes[0]
@@ -247,15 +249,43 @@ func TestBuildHTTPRoutes(t *testing.T) {
 	if b := rules[1].BackendRefs[0]; string(*b.Name) != "api" || *b.Port != 9090 {
 		t.Errorf("rule 1 backend = %v:%v, want api:9090 (named port resolved)", *b.Name, *b.Port)
 	}
-	// TLS host: attached to Gateway and ListenerSet.
+	// TLS host: attached to Gateway and, pinned to the HTTPS listener, the
+	// ListenerSet (the HTTP listener is served by the redirect route).
 	if len(shop.Spec.ParentRefs) != 2 {
 		t.Fatalf("expected 2 parentRefs for TLS host, got %d", len(shop.Spec.ParentRefs))
 	}
-	if string(*shop.Spec.ParentRefs[1].Kind) != "ListenerSet" || string(*shop.Spec.ParentRefs[1].Name) != "shop" {
-		t.Errorf("parentRef 1 = %+v, want ListenerSet shop", shop.Spec.ParentRefs[1])
+	lsRef := shop.Spec.ParentRefs[1]
+	if string(*lsRef.Kind) != "ListenerSet" || string(*lsRef.Name) != "shop" {
+		t.Errorf("parentRef 1 = %+v, want ListenerSet shop", lsRef)
+	}
+	if lsRef.SectionName == nil || *lsRef.SectionName != listenerName("https", "shop.example.com") {
+		t.Errorf("app route sectionName = %v, want HTTPS listener", lsRef.SectionName)
 	}
 
-	admin := routes[1]
+	redirect := routes[1]
+	if *redirect.Name != redirectRouteName("shop", "shop.example.com") {
+		t.Errorf("redirect route name = %q", *redirect.Name)
+	}
+	if string(redirect.Spec.Hostnames[0]) != "shop.example.com" {
+		t.Errorf("redirect hostnames = %v", redirect.Spec.Hostnames)
+	}
+	if len(redirect.Spec.ParentRefs) != 1 {
+		t.Fatalf("redirect route must only attach to the HTTP listener, got %d parentRefs", len(redirect.Spec.ParentRefs))
+	}
+	rRef := redirect.Spec.ParentRefs[0]
+	if string(*rRef.Kind) != "ListenerSet" || rRef.SectionName == nil || *rRef.SectionName != listenerName("http", "shop.example.com") {
+		t.Errorf("redirect parentRef = %+v, want ListenerSet HTTP listener", rRef)
+	}
+	filter := redirect.Spec.Rules[0].Filters[0]
+	if *filter.Type != gatewayv1.HTTPRouteFilterRequestRedirect ||
+		*filter.RequestRedirect.Scheme != "https" || *filter.RequestRedirect.StatusCode != 308 {
+		t.Errorf("unexpected redirect filter: %+v", filter)
+	}
+	if filter.RequestRedirect.Port != nil {
+		t.Errorf("redirect port must be omitted for 443, got %v", *filter.RequestRedirect.Port)
+	}
+
+	admin := routes[2]
 	// ImplementationSpecific defaults to Prefix, empty path to "/".
 	if m := admin.Spec.Rules[0].Matches[0].Path; *m.Type != gatewayv1.PathMatchPathPrefix || *m.Value != "/" {
 		t.Errorf("admin match = %v/%v, want PathPrefix /", *m.Type, *m.Value)
@@ -288,6 +318,67 @@ func TestBuildHTTPRoutesSkipsResourceBackendsAndNonHTTPRules(t *testing.T) {
 	}
 	if len(routes) != 0 {
 		t.Fatalf("expected no routes, got %d", len(routes))
+	}
+}
+
+func TestBuildHTTPRoutesSSLRedirectDisabled(t *testing.T) {
+	ing := newIngress()
+	ing.Annotations = map[string]string{"nginx.ingress.kubernetes.io/ssl-redirect": "false"}
+	ing.Spec.TLS = []netv1.IngressTLS{{Hosts: []string{"shop.example.com"}, SecretName: "shop-tls"}}
+	ing.Spec.Rules = []netv1.IngressRule{{
+		Host: "shop.example.com",
+		IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{
+			{Path: "/", Backend: netv1.IngressBackend{Service: &netv1.IngressServiceBackend{
+				Name: "frontend", Port: netv1.ServiceBackendPort{Number: 8080}}}},
+		}}},
+	}}
+
+	routes, err := buildHTTPRoutes(context.Background(), ing, testOpts, staticResolver(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route without redirect, got %d", len(routes))
+	}
+	// Without a redirect the app route attaches to the whole ListenerSet,
+	// serving both HTTP and HTTPS.
+	if ref := routes[0].Spec.ParentRefs[1]; ref.SectionName != nil {
+		t.Errorf("expected no sectionName, got %v", *ref.SectionName)
+	}
+}
+
+func TestBuildHTTPRoutesSSLRedirectWildcardAndCustomPort(t *testing.T) {
+	opts := testOpts
+	opts.httpsPort = 8443
+
+	ing := newIngress()
+	ing.Spec.TLS = []netv1.IngressTLS{{Hosts: []string{"*.example.com"}, SecretName: "wild-tls"}}
+	ing.Spec.Rules = []netv1.IngressRule{{
+		Host: "shop.example.com",
+		IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{
+			{Path: "/", Backend: netv1.IngressBackend{Service: &netv1.IngressServiceBackend{
+				Name: "frontend", Port: netv1.ServiceBackendPort{Number: 8080}}}},
+		}}},
+	}}
+
+	routes, err := buildHTTPRoutes(context.Background(), ing, opts, staticResolver(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("expected app + redirect route, got %d", len(routes))
+	}
+	// The section names must reference the wildcard TLS host's listeners,
+	// not the rule host's.
+	if ref := routes[0].Spec.ParentRefs[1]; *ref.SectionName != listenerName("https", "*.example.com") {
+		t.Errorf("app sectionName = %v, want wildcard HTTPS listener", *ref.SectionName)
+	}
+	if ref := routes[1].Spec.ParentRefs[0]; *ref.SectionName != listenerName("http", "*.example.com") {
+		t.Errorf("redirect sectionName = %v, want wildcard HTTP listener", *ref.SectionName)
+	}
+	// Non-default HTTPS port must be part of the redirect.
+	if port := routes[1].Spec.Rules[0].Filters[0].RequestRedirect.Port; port == nil || *port != 8443 {
+		t.Errorf("redirect port = %v, want 8443", port)
 	}
 }
 

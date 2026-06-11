@@ -21,6 +21,9 @@ const (
 	issuerAnnotation            = "cert-manager.io/issuer"
 	tlsACMEAnnotation           = "kubernetes.io/tls-acme"
 
+	sslRedirectAnnotation       = "nginx.ingress.kubernetes.io/ssl-redirect"
+	sslRedirectAnnotationLegacy = "ingress.kubernetes.io/ssl-redirect"
+
 	gatewayGroup = "gateway.networking.k8s.io"
 )
 
@@ -173,6 +176,9 @@ func buildHTTPRoutes(ctx context.Context, ing *netv1.Ingress, opts buildOptions,
 
 	var routes []*gatewayv1ac.HTTPRouteApplyConfiguration
 	for _, host := range hosts {
+		tlsHost, tlsCovered := coveringTLSHost(ing, host)
+		redirect := tlsCovered && sslRedirectEnabled(ing)
+
 		var rules []*gatewayv1ac.HTTPRouteRuleApplyConfiguration
 		for _, path := range pathsByHost[host] {
 			if path.Backend.Service == nil {
@@ -207,7 +213,7 @@ func buildHTTPRoutes(ctx context.Context, ing *netv1.Ingress, opts buildOptions,
 		}
 
 		spec := gatewayv1ac.HTTPRouteSpec().
-			WithParentRefs(routeParentRefs(ing, host, opts)...).
+			WithParentRefs(routeParentRefs(ing, tlsHost, tlsCovered, redirect, opts)...).
 			WithRules(rules...)
 		if host != "" {
 			spec = spec.WithHostnames(gatewayv1.Hostname(host))
@@ -217,14 +223,56 @@ func buildHTTPRoutes(ctx context.Context, ing *netv1.Ingress, opts buildOptions,
 			WithLabels(managedLabels()).
 			WithOwnerReferences(ownerReference(ing)).
 			WithSpec(spec))
+
+		if redirect {
+			routes = append(routes, buildRedirectRoute(ing, host, tlsHost, opts))
+		}
 	}
 	return routes, nil
 }
 
-// routeParentRefs returns the parents the HTTPRoute for the given host
-// attaches to: always the configured Gateway, and additionally the generated
-// ListenerSet when the Ingress terminates TLS for that host.
-func routeParentRefs(ing *netv1.Ingress, host string, opts buildOptions) []*gatewayv1ac.ParentReferenceApplyConfiguration {
+// buildRedirectRoute returns an HTTPRoute that answers plain HTTP requests
+// for a TLS-covered host with a permanent redirect to HTTPS. It attaches
+// only to the host's HTTP listener in the ListenerSet; the app route is
+// pinned to the HTTPS listener instead.
+func buildRedirectRoute(ing *netv1.Ingress, host, tlsHost string, opts buildOptions) *gatewayv1ac.HTTPRouteApplyConfiguration {
+	redirectFilter := gatewayv1ac.HTTPRequestRedirectFilter().
+		WithScheme("https").
+		WithStatusCode(308)
+	if opts.httpsPort != 443 {
+		redirectFilter = redirectFilter.WithPort(gatewayv1.PortNumber(opts.httpsPort))
+	}
+
+	spec := gatewayv1ac.HTTPRouteSpec().
+		WithParentRefs(gatewayv1ac.ParentReference().
+			WithGroup(gatewayGroup).
+			WithKind("ListenerSet").
+			WithName(gatewayv1.ObjectName(ing.Name)).
+			WithSectionName(listenerName("http", tlsHost))).
+		WithRules(gatewayv1ac.HTTPRouteRule().
+			WithMatches(gatewayv1ac.HTTPRouteMatch().
+				WithPath(gatewayv1ac.HTTPPathMatch().
+					WithType(gatewayv1.PathMatchPathPrefix).
+					WithValue("/"))).
+			WithFilters(gatewayv1ac.HTTPRouteFilter().
+				WithType(gatewayv1.HTTPRouteFilterRequestRedirect).
+				WithRequestRedirect(redirectFilter)))
+	if host != "" {
+		spec = spec.WithHostnames(gatewayv1.Hostname(host))
+	}
+
+	return gatewayv1ac.HTTPRoute(redirectRouteName(ing.Name, host), ing.Namespace).
+		WithLabels(managedLabels()).
+		WithOwnerReferences(ownerReference(ing)).
+		WithSpec(spec)
+}
+
+// routeParentRefs returns the parents the app HTTPRoute attaches to: always
+// the configured Gateway, and additionally the generated ListenerSet when
+// the Ingress terminates TLS for the host. With an HTTPS redirect in place
+// the ListenerSet attachment is pinned to the HTTPS listener so that plain
+// HTTP is left to the redirect route.
+func routeParentRefs(ing *netv1.Ingress, tlsHost string, tlsCovered, redirect bool, opts buildOptions) []*gatewayv1ac.ParentReferenceApplyConfiguration {
 	gatewayRef := gatewayv1ac.ParentReference().
 		WithGroup(gatewayGroup).
 		WithKind("Gateway").
@@ -234,40 +282,73 @@ func routeParentRefs(ing *netv1.Ingress, host string, opts buildOptions) []*gate
 	}
 	refs := []*gatewayv1ac.ParentReferenceApplyConfiguration{gatewayRef}
 
-	if tlsCoversHost(ing, host) {
-		refs = append(refs, gatewayv1ac.ParentReference().
+	if tlsCovered {
+		listenerSetRef := gatewayv1ac.ParentReference().
 			WithGroup(gatewayGroup).
 			WithKind("ListenerSet").
-			WithName(gatewayv1.ObjectName(ing.Name)))
+			WithName(gatewayv1.ObjectName(ing.Name))
+		if redirect {
+			listenerSetRef = listenerSetRef.WithSectionName(listenerName("https", tlsHost))
+		}
+		refs = append(refs, listenerSetRef)
 	}
 	return refs
 }
 
-// tlsCoversHost reports whether any spec.tls entry of the Ingress covers the
-// given host, taking wildcard TLS hosts into account. A TLS entry without
-// hosts covers everything.
-func tlsCoversHost(ing *netv1.Ingress, host string) bool {
+// coveringTLSHost returns the spec.tls host entry covering the given rule
+// host, preferring exact matches over wildcards over catch-all entries. The
+// returned TLS host names the listener the host's traffic terminates on
+// ("" for an entry without hosts). ok is false when no TLS entry covers the
+// host.
+func coveringTLSHost(ing *netv1.Ingress, host string) (string, bool) {
+	wildcard, catchAll := "", false
 	for _, tls := range ing.Spec.TLS {
 		if tls.SecretName == "" {
 			continue
 		}
 		if len(tls.Hosts) == 0 {
-			return true
+			catchAll = true
+			continue
 		}
 		for _, tlsHost := range tls.Hosts {
 			if tlsHost == host {
-				return true
+				return tlsHost, true
 			}
 			// "*.example.com" covers exactly one additional leftmost label.
-			if suffix, ok := strings.CutPrefix(tlsHost, "*"); ok {
+			if suffix, ok := strings.CutPrefix(tlsHost, "*"); ok && wildcard == "" {
 				if prefix, found := strings.CutSuffix(host, suffix); found &&
 					prefix != "" && !strings.Contains(prefix, ".") {
-					return true
+					wildcard = tlsHost
 				}
 			}
 		}
 	}
-	return false
+	if wildcard != "" {
+		return wildcard, true
+	}
+	if catchAll {
+		return "", true
+	}
+	return "", false
+}
+
+// tlsCoversHost reports whether any spec.tls entry of the Ingress covers the
+// given host.
+func tlsCoversHost(ing *netv1.Ingress, host string) bool {
+	_, ok := coveringTLSHost(ing, host)
+	return ok
+}
+
+// sslRedirectEnabled reports whether HTTP traffic for TLS-covered hosts
+// should be redirected to HTTPS. Enabled by default (matching
+// ingress-nginx), disabled via the ssl-redirect annotations.
+func sslRedirectEnabled(ing *netv1.Ingress) bool {
+	for _, key := range []string{sslRedirectAnnotation, sslRedirectAnnotationLegacy} {
+		if v, ok := ing.Annotations[key]; ok {
+			return v == "true"
+		}
+	}
+	return true
 }
 
 // routeName derives a stable, unique HTTPRoute name from the Ingress name and
@@ -280,6 +361,17 @@ func routeName(ingressName, host string) string {
 		ingressName = ingressName[:maxPrefix]
 	}
 	return ingressName + "-" + suffix
+}
+
+// redirectRouteName derives the name of the HTTP-to-HTTPS redirect route for
+// a host, sharing the routeName scheme with a fixed suffix.
+func redirectRouteName(ingressName, host string) string {
+	const suffix = "-redirect"
+	name := routeName(ingressName, host)
+	if len(name) > 253-len(suffix) {
+		name = name[:253-len(suffix)]
+	}
+	return name + suffix
 }
 
 // listenerName derives a stable listener name from the scheme and TLS host.
