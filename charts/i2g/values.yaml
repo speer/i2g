@@ -1,3 +1,6 @@
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   repository: ghcr.io/speer/i2g
   # Defaults to the chart appVersion.
@@ -38,6 +41,8 @@ controller:
   # warning Event on the Ingress. Unset keeps the controller default
   # (nginx.ingress.kubernetes.io/, ingress.kubernetes.io/). Pass an explicit
   # list to override, e.g. for Traefik or HAProxy annotation namespaces.
+  # To disable the warnings entirely, add "--warn-annotation-prefixes="
+  # to extraArgs.
   warnAnnotationPrefixes: []
   # Mirror the Gateway's addresses into status.loadBalancer of reconciled
   # Ingresses (for external-dns, kubectl, ...). Enable only once the

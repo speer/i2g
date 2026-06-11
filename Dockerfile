@@ -1,4 +1,6 @@
-FROM golang:1.26@sha256:87a41d2539e5671777734e91f467499ed5eafb1fb1f77221dff2744db7a51775 AS build
+# The full patch tag (not just 1.26) keeps the toolchain in lockstep with the
+# go directive in go.mod: Renovate groups both patch bumps into one PR.
+FROM golang:1.26.4@sha256:87a41d2539e5671777734e91f467499ed5eafb1fb1f77221dff2744db7a51775 AS build
 
 WORKDIR /src
 

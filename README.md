@@ -149,9 +149,10 @@ spec:
       kind: Gateway
       name: shared-gateway
       namespace: infra
-    - group: gateway.networking.k8s.io   # added because spec.tls covers the host
-      kind: ListenerSet
-      name: shop
+    - group: gateway.networking.k8s.io   # added because spec.tls covers the host;
+      kind: ListenerSet                  # pinned to the HTTPS listener because of
+      name: shop                         # the default HTTPS redirect
+      sectionName: https-shop-example-com-<hash>
   hostnames: [shop.example.com]
   rules:
     - matches:
@@ -161,6 +162,31 @@ spec:
       backendRefs:
         - name: frontend
           port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: shop-shop-example-com-<hash>-redirect   # plain HTTP answers with 308 to HTTPS
+  namespace: team-a
+  labels:
+    app.kubernetes.io/managed-by: ingress2gateway
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: ListenerSet
+      name: shop
+      sectionName: http-shop-example-com-<hash>
+  hostnames: [shop.example.com]
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 308
 ```
 
 ### Rules of the translation
