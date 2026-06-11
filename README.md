@@ -206,6 +206,15 @@ spec:
   deduplicated into one event with a counter). Annotations outside those
   prefixes (Helm, GitOps tooling, …) are ignored silently, as they carry no
   traffic semantics. A clean Ingress emits nothing.
+- **Feedback from the Gateway implementation**: after applying, the
+  controller reads the status conditions the Gateway implementation writes
+  on the generated resources and raises warning Events on the Ingress for
+  definitive failures — ListenerSet/listener not `Accepted`/`Programmed`
+  (e.g. the Gateway does not allow ListenerSets, listener limits, missing
+  TLS Secret) and HTTPRoute parents not `Accepted`/`ResolvedRefs` (e.g.
+  hostname/listener mismatch, backend Service gone). This catches
+  "translated but not actually serving". `Unknown` conditions are ignored;
+  they only mean the implementation has not processed the resource yet.
 - **Ownership & cleanup**: generated resources carry an owner reference to
   the Ingress (deleting the Ingress garbage-collects them) and the
   `app.kubernetes.io/managed-by: ingress2gateway` label. HTTPRoutes for hosts

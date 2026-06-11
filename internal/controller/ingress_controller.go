@@ -133,6 +133,10 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	if r.Recorder != nil {
+		r.reportGatewayStatus(ctx, ing, listenerSet != nil, desiredRoutes)
+	}
+
 	if r.UpdateIngressStatus {
 		if err := r.syncIngressStatus(ctx, ing); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating Ingress status: %w", err)
@@ -141,6 +145,104 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	log.V(1).Info("reconciled", "httpRoutes", len(routes), "listenerSet", listenerSet != nil)
 	return ctrl.Result{}, nil
+}
+
+// reportGatewayStatus reads back the status the Gateway implementation wrote
+// on the generated resources and surfaces definitive failures as warning
+// Events on the Ingress. A successful apply only proves the API server
+// accepted the resources; whether they are actually served is reported
+// asynchronously via status conditions. Status updates on owned resources
+// re-trigger reconciliation, so this converges without extra watches.
+func (r *IngressReconciler) reportGatewayStatus(ctx context.Context, ing *netv1.Ingress, expectListenerSet bool, desiredRoutes map[string]bool) {
+	log := logf.FromContext(ctx)
+
+	var listenerSet *gatewayv1.ListenerSet
+	if expectListenerSet {
+		listenerSet = &gatewayv1.ListenerSet{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: ing.Namespace, Name: ing.Name}, listenerSet); err != nil {
+			log.V(1).Info("cannot read back ListenerSet for status reporting", "error", err)
+			listenerSet = nil
+		}
+	}
+
+	var routes []*gatewayv1.HTTPRoute
+	routeList := &gatewayv1.HTTPRouteList{}
+	if err := r.List(ctx, routeList,
+		client.InNamespace(ing.Namespace),
+		client.MatchingLabels(managedLabels())); err != nil {
+		log.V(1).Info("cannot read back HTTPRoutes for status reporting", "error", err)
+	} else {
+		for i := range routeList.Items {
+			route := &routeList.Items[i]
+			if ownedBy(route, ing) && desiredRoutes[route.Name] {
+				routes = append(routes, route)
+			}
+		}
+	}
+
+	for _, warning := range gatewayStatusWarnings(listenerSet, routes) {
+		r.Recorder.Event(ing, corev1.EventTypeWarning, warning.Reason, warning.Message)
+	}
+}
+
+// gatewayStatusWarnings converts definitive failure conditions on generated
+// resources into warnings. Only well-known condition types are considered,
+// and Unknown is always skipped — it merely means the Gateway implementation
+// has not processed the resource yet.
+func gatewayStatusWarnings(listenerSet *gatewayv1.ListenerSet, routes []*gatewayv1.HTTPRoute) []translationWarning {
+	var warnings []translationWarning
+
+	if listenerSet != nil {
+		for _, c := range listenerSet.Status.Conditions {
+			if (c.Type == "Accepted" || c.Type == "Programmed") && c.Status == metav1.ConditionFalse {
+				warnings = append(warnings, translationWarning{
+					Reason:  "ListenerSetRejected",
+					Message: fmt.Sprintf("ListenerSet %q: %s=False (%s): %s", listenerSet.Name, c.Type, c.Reason, c.Message),
+				})
+			}
+		}
+		for _, listener := range listenerSet.Status.Listeners {
+			for _, c := range listener.Conditions {
+				failed := (c.Type == "Conflicted" && c.Status == metav1.ConditionTrue) ||
+					((c.Type == "Accepted" || c.Type == "Programmed" || c.Type == "ResolvedRefs") && c.Status == metav1.ConditionFalse)
+				if failed {
+					warnings = append(warnings, translationWarning{
+						Reason:  "ListenerRejected",
+						Message: fmt.Sprintf("listener %q of ListenerSet %q: %s=%s (%s): %s", listener.Name, listenerSet.Name, c.Type, c.Status, c.Reason, c.Message),
+					})
+				}
+			}
+		}
+	}
+
+	for _, route := range routes {
+		for _, parent := range route.Status.Parents {
+			for _, c := range parent.Conditions {
+				if (c.Type == "Accepted" || c.Type == "ResolvedRefs") && c.Status == metav1.ConditionFalse {
+					warnings = append(warnings, translationWarning{
+						Reason:  "HTTPRouteRejected",
+						Message: fmt.Sprintf("HTTPRoute %q parent %s: %s=False (%s): %s", route.Name, parentRefDescription(parent.ParentRef), c.Type, c.Reason, c.Message),
+					})
+				}
+			}
+		}
+	}
+	return warnings
+}
+
+func parentRefDescription(ref gatewayv1.ParentReference) string {
+	kind := "Gateway"
+	if ref.Kind != nil {
+		kind = string(*ref.Kind)
+	}
+	name := string(ref.Name)
+	if ref.Namespace != nil {
+		name = string(*ref.Namespace) + "/" + name
+	}
+	if ref.SectionName != nil {
+		return fmt.Sprintf("%s %q (listener %q)", kind, name, string(*ref.SectionName))
+	}
+	return fmt.Sprintf("%s %q", kind, name)
 }
 
 // syncIngressStatus mirrors the Gateway's addresses into the Ingress
