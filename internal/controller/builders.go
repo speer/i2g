@@ -142,22 +142,33 @@ func buildListenerSet(ing *netv1.Ingress, opts buildOptions) *gatewayv1ac.Listen
 			WithListeners(listeners...))
 }
 
-// buildHTTPRoutes translates spec.rules of the Ingress into one HTTPRoute per
-// distinct host. Rules without an HTTP section or paths without a Service
-// backend are skipped.
+// buildHTTPRoutes translates spec.rules and spec.defaultBackend of the
+// Ingress into one HTTPRoute per distinct host. Rules without an HTTP section
+// or paths without a Service backend are skipped.
 func buildHTTPRoutes(ctx context.Context, ing *netv1.Ingress, opts buildOptions, resolvePort portResolver) ([]*gatewayv1ac.HTTPRouteApplyConfiguration, error) {
 	// Group paths by host, preserving rule order. Ingress allows the same
 	// host to appear in multiple rules.
 	var hosts []string
 	pathsByHost := map[string][]netv1.HTTPIngressPath{}
+	addPaths := func(host string, paths ...netv1.HTTPIngressPath) {
+		if _, ok := pathsByHost[host]; !ok {
+			hosts = append(hosts, host)
+		}
+		pathsByHost[host] = append(pathsByHost[host], paths...)
+	}
 	for _, rule := range ing.Spec.Rules {
 		if rule.HTTP == nil {
 			continue
 		}
-		if _, ok := pathsByHost[rule.Host]; !ok {
-			hosts = append(hosts, rule.Host)
-		}
-		pathsByHost[rule.Host] = append(pathsByHost[rule.Host], rule.HTTP.Paths...)
+		addPaths(rule.Host, rule.HTTP.Paths...)
+	}
+
+	// The default backend catches everything no rule matches. It becomes a
+	// hostname-less "/" prefix rule, appended last: across HTTPRoutes,
+	// Gateway API gives host-specific routes precedence over routes without
+	// hostnames, and within a route earlier rules win on equal matches.
+	if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
+		addPaths("", netv1.HTTPIngressPath{Path: "/", Backend: *ing.Spec.DefaultBackend})
 	}
 
 	var routes []*gatewayv1ac.HTTPRouteApplyConfiguration

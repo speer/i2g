@@ -227,6 +227,9 @@ func (r *IngressReconciler) ingressesForService(ctx context.Context, obj client.
 }
 
 func ingressReferencesService(ing *netv1.Ingress, serviceName string) bool {
+	if db := ing.Spec.DefaultBackend; db != nil && db.Service != nil && db.Service.Name == serviceName {
+		return true
+	}
 	for _, rule := range ing.Spec.Rules {
 		if rule.HTTP == nil {
 			continue

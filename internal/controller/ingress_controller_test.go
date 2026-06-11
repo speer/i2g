@@ -6,6 +6,22 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 )
 
+func TestIngressReferencesService(t *testing.T) {
+	ing := newIngress()
+	ing.Spec.DefaultBackend = &netv1.IngressBackend{Service: &netv1.IngressServiceBackend{Name: "fallback"}}
+	ing.Spec.Rules = []netv1.IngressRule{{
+		IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{
+			{Path: "/", Backend: netv1.IngressBackend{Service: &netv1.IngressServiceBackend{Name: "frontend"}}},
+		}}},
+	}}
+
+	for name, want := range map[string]bool{"frontend": true, "fallback": true, "other": false} {
+		if got := ingressReferencesService(ing, name); got != want {
+			t.Errorf("ingressReferencesService(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestClassMatches(t *testing.T) {
 	className := func(s string) *netv1.Ingress {
 		ing := newIngress()

@@ -174,6 +174,11 @@ spec:
   without `secretName` are skipped. HTTPRoutes for hosts covered by TLS
   (exact or single-label wildcard match) additionally attach to the
   ListenerSet.
+- **`spec.defaultBackend`** becomes a hostname-less `PathPrefix /` rule with
+  the lowest matching precedence: Gateway API prefers routes with more
+  specific hostnames and paths, and within the shared catch-all route the
+  rule is appended last, so all explicit rules win — mirroring Ingress
+  default-backend semantics.
 - **cert-manager annotations**: every `cert-manager.io/*` annotation of the
   Ingress is copied to the ListenerSet. If neither
   `cert-manager.io/cluster-issuer` nor `cert-manager.io/issuer` is present but
@@ -188,7 +193,7 @@ spec:
 
 ### Out of scope
 
-- `spec.defaultBackend` and `backend.resource` (non-Service backends)
+- `backend.resource` (non-Service backends)
 - Ingress rules without an `http` section
 
 ## Deploying

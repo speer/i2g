@@ -291,6 +291,63 @@ func TestBuildHTTPRoutesSkipsResourceBackendsAndNonHTTPRules(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPRoutesDefaultBackend(t *testing.T) {
+	ing := newIngress()
+	// Named port: resolved against the Service like any rule backend.
+	ing.Spec.DefaultBackend = &netv1.IngressBackend{Service: &netv1.IngressServiceBackend{
+		Name: "fallback", Port: netv1.ServiceBackendPort{Name: "http"}}}
+
+	routes, err := buildHTTPRoutes(context.Background(), ing, testOpts, staticResolver(map[string]int32{"fallback/http": 8080}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(routes))
+	}
+	route := routes[0]
+	if len(route.Spec.Hostnames) != 0 {
+		t.Errorf("default backend route must not have hostnames, got %v", route.Spec.Hostnames)
+	}
+	if m := route.Spec.Rules[0].Matches[0].Path; *m.Type != gatewayv1.PathMatchPathPrefix || *m.Value != "/" {
+		t.Errorf("match = %v/%v, want PathPrefix /", *m.Type, *m.Value)
+	}
+	if b := route.Spec.Rules[0].BackendRefs[0]; string(*b.Name) != "fallback" || *b.Port != 8080 {
+		t.Errorf("backend = %v:%v, want fallback:8080", *b.Name, *b.Port)
+	}
+}
+
+func TestBuildHTTPRoutesDefaultBackendMergedLast(t *testing.T) {
+	// A host-less rule and the default backend share the catch-all HTTPRoute;
+	// the default backend rule must come last so explicit paths win.
+	ing := newIngress()
+	ing.Spec.DefaultBackend = &netv1.IngressBackend{Service: &netv1.IngressServiceBackend{
+		Name: "fallback", Port: netv1.ServiceBackendPort{Number: 8080}}}
+	ing.Spec.Rules = []netv1.IngressRule{{
+		IngressRuleValue: netv1.IngressRuleValue{HTTP: &netv1.HTTPIngressRuleValue{Paths: []netv1.HTTPIngressPath{
+			{Path: "/api", Backend: netv1.IngressBackend{Service: &netv1.IngressServiceBackend{
+				Name: "api", Port: netv1.ServiceBackendPort{Number: 9090}}}},
+		}}},
+	}}
+
+	routes, err := buildHTTPRoutes(context.Background(), ing, testOpts, staticResolver(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 merged route, got %d", len(routes))
+	}
+	rules := routes[0].Spec.Rules
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+	if b := rules[0].BackendRefs[0]; string(*b.Name) != "api" {
+		t.Errorf("rule 0 backend = %v, want api (explicit rule first)", *b.Name)
+	}
+	if b := rules[1].BackendRefs[0]; string(*b.Name) != "fallback" {
+		t.Errorf("rule 1 backend = %v, want fallback (default backend last)", *b.Name)
+	}
+}
+
 func TestBuildHTTPRoutesUnresolvablePortFails(t *testing.T) {
 	ing := newIngress()
 	ing.Spec.Rules = []netv1.IngressRule{{
