@@ -2,13 +2,18 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +30,26 @@ var scheme = runtime.NewScheme()
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
+}
+
+// checkGatewayAPICRDs verifies that the gateway.networking.k8s.io/v1 API
+// serves the kinds this controller manages.
+func checkGatewayAPICRDs(restConfig *rest.Config) error {
+	dc, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("creating discovery client: %w", err)
+	}
+	groupVersion := gatewayv1.GroupVersion.String()
+	resources, err := dc.ServerResourcesForGroupVersion(groupVersion)
+	if err != nil {
+		return fmt.Errorf("API group %s is not served: %w", groupVersion, err)
+	}
+	for _, required := range []string{"listenersets", "httproutes", "gateways"} {
+		if !slices.ContainsFunc(resources.APIResources, func(r metav1.APIResource) bool { return r.Name == required }) {
+			return fmt.Errorf("resource %q not found in %s", required, groupVersion)
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -158,7 +183,17 @@ func main() {
 		}
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), managerOpts)
+	restConfig := ctrl.GetConfigOrDie()
+
+	// Fail fast with a clear message when the Gateway API CRDs are missing;
+	// otherwise the symptom is an endless stream of "no matches for kind"
+	// watch errors after startup.
+	if err := checkGatewayAPICRDs(restConfig); err != nil {
+		setupLog.Error(err, "Gateway API v1.5+ CRDs (standard channel) are required, see https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api")
+		os.Exit(1)
+	}
+
+	mgr, err := ctrl.NewManager(restConfig, managerOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
 		os.Exit(1)

@@ -219,6 +219,13 @@ spec:
   it from translation; previously generated resources (and, with
   `--update-ingress-status`, the controller's status ownership) are cleaned
   up. Removing the annotation re-translates it.
+- **Same TLS host in multiple Ingresses**: each Ingress gets its own
+  ListenerSet, so two Ingresses declaring TLS for the same host produce two
+  listeners for that host:443. Per the Gateway API merge rules the oldest
+  ListenerSet wins; the others get `Conflicted: True`, which this controller
+  surfaces as a warning Event on the affected Ingress. This differs from
+  ingress-nginx, which merges such Ingresses — consolidate the TLS section
+  into one Ingress per host if you hit this.
 - **Ownership & cleanup**: generated resources carry an owner reference to
   the Ingress (deleting the Ingress garbage-collects them) and the
   `app.kubernetes.io/managed-by: ingress2gateway` label. HTTPRoutes for hosts
@@ -234,6 +241,37 @@ spec:
   their default certificate, which has no per-Ingress equivalent here. Such
   entries are skipped — configure a catch-all HTTPS listener with a default
   certificate on the shared Gateway instead if you need that behavior.
+- Translating controller-specific annotations that configure traffic
+  behavior (`rewrite-target`, canary weights, CORS, auth, rate limits, …).
+  These raise warning Events instead (see `--warn-annotation-prefixes`),
+  giving you a per-Ingress inventory of what must be ported by hand — e.g.
+  to HTTPRoute filters or implementation policies.
+
+## Migrating from an ingress controller
+
+The controller is built to run **alongside** the existing ingress
+controller; nothing is removed from it and the Ingresses are never modified
+(except, optionally, their status). A typical migration:
+
+1. **Install** Gateway API v1.5+ CRDs, a Gateway implementation, and a
+   Gateway with `allowedListeners` admitting the app namespaces (see
+   Requirements). Deploy i2g with the matching `--ingress-class`, scoped to
+   a pilot set of namespaces via `--namespace-selector`.
+2. **Review warnings**: `kubectl get events -A --field-selector
+   reason=UnsupportedAnnotation` (and the other warning reasons) lists every
+   Ingress relying on behavior the translation drops; port those to
+   HTTPRoute filters or implementation policies by hand, or exclude the
+   Ingress with `i2g.dev/skip: "true"` for now.
+3. **Verify per host** against the Gateway's address (e.g. `curl
+   --resolve`): TLS, redirect, routing, ACME renewals. The generated
+   resources' status failures show up as warning Events on the Ingresses.
+4. **Cut over DNS** to the Gateway address. Once the old ingress controller
+   no longer serves traffic, enable `--update-ingress-status` so
+   external-dns and `kubectl get ingress` follow the Gateway, then
+   decommission the old controller.
+5. Widen `--namespace-selector` and repeat. Eventually, replace the
+   Ingresses with native HTTPRoutes at your own pace — deleting an Ingress
+   garbage-collects its generated resources.
 
 ## Deploying
 
