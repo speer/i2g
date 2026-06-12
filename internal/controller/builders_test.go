@@ -14,11 +14,10 @@ import (
 )
 
 var testOpts = buildOptions{
-	gatewayName:          "shared-gateway",
-	gatewayNamespace:     "infra",
-	httpsPort:            443,
-	httpPort:             80,
-	defaultClusterIssuer: "letsencrypt-prod",
+	gatewayName:      "shared-gateway",
+	gatewayNamespace: "infra",
+	httpsPort:        443,
+	httpPort:         80,
 }
 
 func newIngress() *netv1.Ingress {
@@ -47,68 +46,41 @@ func staticResolver(ports map[string]int32) portResolver {
 
 func TestListenerSetAnnotations(t *testing.T) {
 	tests := []struct {
-		name          string
-		annotations   map[string]string
-		defaultIssuer string
-		want          map[string]string
+		name        string
+		annotations map[string]string
+		want        map[string]string
 	}{
 		{
-			name: "copies only cert-manager annotations",
+			name: "maps prefixed annotations, ignores direct cert-manager and others",
 			annotations: map[string]string{
-				"cert-manager.io/cluster-issuer":             "my-issuer",
-				"cert-manager.io/common-name":                "example.com",
+				"cert-manager.i2g.dev/cluster-issuer":        "my-issuer",
+				"cert-manager.i2g.dev/common-name":           "example.com",
+				"cert-manager.io/cluster-issuer":             "ingress-shim-owned", // not copied: would double-trigger cert-manager
 				"nginx.ingress.kubernetes.io/rewrite-target": "/",
 				"kubernetes.io/ingress.class":                "nginx",
 				"example.com/unrelated":                      "x",
 			},
-			defaultIssuer: "letsencrypt-prod",
 			want: map[string]string{
 				"cert-manager.io/cluster-issuer": "my-issuer",
 				"cert-manager.io/common-name":    "example.com",
 			},
 		},
 		{
-			name:          "tls-acme without issuer gets default cluster-issuer",
-			annotations:   map[string]string{"kubernetes.io/tls-acme": "true"},
-			defaultIssuer: "letsencrypt-prod",
-			want:          map[string]string{"cert-manager.io/cluster-issuer": "letsencrypt-prod"},
+			name:        "legacy kubernetes.io/tls-acme produces nothing",
+			annotations: map[string]string{"kubernetes.io/tls-acme": "true"},
+			want:        map[string]string{},
 		},
 		{
-			name: "tls-acme does not override explicit cluster-issuer",
-			annotations: map[string]string{
-				"kubernetes.io/tls-acme":         "true",
-				"cert-manager.io/cluster-issuer": "my-issuer",
-			},
-			defaultIssuer: "letsencrypt-prod",
-			want:          map[string]string{"cert-manager.io/cluster-issuer": "my-issuer"},
-		},
-		{
-			name: "tls-acme does not add cluster-issuer next to namespaced issuer",
-			annotations: map[string]string{
-				"kubernetes.io/tls-acme": "true",
-				"cert-manager.io/issuer": "team-issuer",
-			},
-			defaultIssuer: "letsencrypt-prod",
-			want:          map[string]string{"cert-manager.io/issuer": "team-issuer"},
-		},
-		{
-			name:          "tls-acme false adds nothing",
-			annotations:   map[string]string{"kubernetes.io/tls-acme": "false"},
-			defaultIssuer: "letsencrypt-prod",
-			want:          map[string]string{},
-		},
-		{
-			name:          "tls-acme without configured default adds nothing",
-			annotations:   map[string]string{"kubernetes.io/tls-acme": "true"},
-			defaultIssuer: "",
-			want:          map[string]string{},
+			name:        "no annotations produce nothing",
+			annotations: nil,
+			want:        map[string]string{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ing := newIngress()
 			ing.Annotations = tt.annotations
-			got := listenerSetAnnotations(ing, tt.defaultIssuer)
+			got := listenerSetAnnotations(ing)
 			if len(got) != len(tt.want) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
@@ -461,7 +433,9 @@ func TestTranslationWarnings(t *testing.T) {
 		"nginx.ingress.kubernetes.io/rewrite-target": "/",     // warns: untranslated traffic semantics
 		"nginx.ingress.kubernetes.io/ssl-redirect":   "false", // handled, no warning
 		"meta.helm.sh/release-name":                  "shop",  // tooling, no warning
-		"cert-manager.io/cluster-issuer":             "le",    // copied, no warning
+		"cert-manager.io/cluster-issuer":             "le",    // warns: ingress-shim trigger, rename hint
+		"cert-manager.i2g.dev/common-name":           "x",     // mapped, no warning
+		"kubernetes.io/tls-acme":                     "true",  // ignored entirely, no warning
 		"argocd.argoproj.io/tracking-id":             "x",     // tooling, no warning
 	}
 	ing.Spec.DefaultBackend = &netv1.IngressBackend{Resource: &corev1.TypedLocalObjectReference{Kind: "StorageBucket", Name: "assets"}}
@@ -475,7 +449,11 @@ func TestTranslationWarnings(t *testing.T) {
 	}
 
 	got := translationWarnings(ing, prefixes)
-	wantReasons := []string{"SkippedRule", "SkippedResourceBackend", "SkippedResourceBackend", "SkippedTLSEntry", "UnsupportedAnnotation"}
+	wantReasons := []string{
+		"SkippedRule", "SkippedResourceBackend", "SkippedResourceBackend", "SkippedTLSEntry",
+		"CertManagerAnnotationIgnored", // cert-manager.io/cluster-issuer
+		"UnsupportedAnnotation",        // nginx rewrite-target
+	}
 	if len(got) != len(wantReasons) {
 		t.Fatalf("expected %d warnings, got %d: %+v", len(wantReasons), len(got), got)
 	}
@@ -484,8 +462,11 @@ func TestTranslationWarnings(t *testing.T) {
 			t.Errorf("warning %d reason = %s, want %s (%s)", i, got[i].Reason, reason, got[i].Message)
 		}
 	}
-	if !strings.Contains(got[4].Message, "rewrite-target") {
-		t.Errorf("annotation warning should name the annotation: %s", got[4].Message)
+	if !strings.Contains(got[4].Message, `"cert-manager.i2g.dev/cluster-issuer"`) {
+		t.Errorf("cert-manager warning should hint at the rename: %s", got[4].Message)
+	}
+	if !strings.Contains(got[5].Message, "rewrite-target") {
+		t.Errorf("annotation warning should name the annotation: %s", got[5].Message)
 	}
 
 	if ws := translationWarnings(newIngress(), prefixes); len(ws) != 0 {
@@ -493,25 +474,28 @@ func TestTranslationWarnings(t *testing.T) {
 	}
 }
 
-func TestTLSCoversHost(t *testing.T) {
+func TestCoveringTLSHost(t *testing.T) {
 	ing := newIngress()
 	ing.Spec.TLS = []netv1.IngressTLS{
 		{Hosts: []string{"exact.example.com", "*.wild.example.com"}, SecretName: "tls"},
 	}
 	tests := []struct {
-		host string
-		want bool
+		host        string
+		wantTLSHost string
+		wantCovered bool
 	}{
-		{"exact.example.com", true},
-		{"other.example.com", false},
-		{"foo.wild.example.com", true},
-		{"a.b.wild.example.com", false}, // wildcard covers a single label only
-		{"wild.example.com", false},
-		{"*.wild.example.com", true},
+		{"exact.example.com", "exact.example.com", true},
+		{"other.example.com", "", false},
+		{"foo.wild.example.com", "*.wild.example.com", true},
+		{"a.b.wild.example.com", "", false}, // wildcard covers a single label only
+		{"wild.example.com", "", false},
+		{"*.wild.example.com", "*.wild.example.com", true},
 	}
 	for _, tt := range tests {
-		if got := tlsCoversHost(ing, tt.host); got != tt.want {
-			t.Errorf("tlsCoversHost(%q) = %v, want %v", tt.host, got, tt.want)
+		tlsHost, covered := coveringTLSHost(ing, tt.host)
+		if covered != tt.wantCovered || tlsHost != tt.wantTLSHost {
+			t.Errorf("coveringTLSHost(%q) = (%q, %v), want (%q, %v)",
+				tt.host, tlsHost, covered, tt.wantTLSHost, tt.wantCovered)
 		}
 	}
 }

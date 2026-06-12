@@ -25,10 +25,6 @@ controller:
   gatewayName: ""
   # Namespace of that Gateway. Empty assumes the Ingress namespace.
   gatewayNamespace: ""
-  # Value for the cert-manager.io/cluster-issuer annotation on generated
-  # ListenerSets when the Ingress has kubernetes.io/tls-acme="true" but no
-  # issuer annotation.
-  defaultClusterIssuer: ""
   # Ports of the generated HTTPS and plain HTTP listeners.
   listenerHttpsPort: 443
   listenerHttpPort: 80

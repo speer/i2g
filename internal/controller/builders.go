@@ -19,9 +19,13 @@ const (
 	managedByLabelValue = "ingress2gateway"
 
 	certManagerAnnotationPrefix = "cert-manager.io/"
-	clusterIssuerAnnotation     = "cert-manager.io/cluster-issuer"
-	issuerAnnotation            = "cert-manager.io/issuer"
-	tlsACMEAnnotation           = "kubernetes.io/tls-acme"
+	// certManagerSourcePrefix marks annotations on the Ingress destined for
+	// the generated ListenerSet: cert-manager.i2g.dev/<name> becomes
+	// cert-manager.io/<name>. The cert-manager.io/* annotations themselves
+	// are deliberately not copied — cert-manager's ingress-shim acts on them
+	// on the Ingress, and copying them would make cert-manager manage the
+	// same Certificate from both the Ingress and the ListenerSet.
+	certManagerSourcePrefix = "cert-manager.i2g.dev/"
 
 	sslRedirectAnnotation       = "nginx.ingress.kubernetes.io/ssl-redirect"
 	sslRedirectAnnotationLegacy = "ingress.kubernetes.io/ssl-redirect"
@@ -32,11 +36,10 @@ const (
 // buildOptions carries the static (flag-derived) configuration needed to
 // translate an Ingress into Gateway API resources.
 type buildOptions struct {
-	gatewayName          string
-	gatewayNamespace     string
-	httpsPort            int32
-	httpPort             int32
-	defaultClusterIssuer string
+	gatewayName      string
+	gatewayNamespace string
+	httpsPort        int32
+	httpPort         int32
 }
 
 // portResolver resolves an Ingress service backend to a concrete port number,
@@ -58,21 +61,14 @@ func managedLabels() map[string]string {
 }
 
 // listenerSetAnnotations returns the annotations to set on the generated
-// ListenerSet: all cert-manager.io/* annotations of the Ingress, plus a
-// default cluster-issuer when the Ingress opts into ACME via
-// kubernetes.io/tls-acme without naming an issuer.
-func listenerSetAnnotations(ing *netv1.Ingress, defaultClusterIssuer string) map[string]string {
+// ListenerSet: all cert-manager.i2g.dev/* annotations of the Ingress mapped
+// to cert-manager.io/*.
+func listenerSetAnnotations(ing *netv1.Ingress) map[string]string {
 	out := map[string]string{}
 	for k, v := range ing.Annotations {
-		if strings.HasPrefix(k, certManagerAnnotationPrefix) {
-			out[k] = v
+		if rest, ok := strings.CutPrefix(k, certManagerSourcePrefix); ok && rest != "" {
+			out[certManagerAnnotationPrefix+rest] = v
 		}
-	}
-	_, hasClusterIssuer := out[clusterIssuerAnnotation]
-	_, hasIssuer := out[issuerAnnotation]
-	if !hasClusterIssuer && !hasIssuer &&
-		ing.Annotations[tlsACMEAnnotation] == "true" && defaultClusterIssuer != "" {
-		out[clusterIssuerAnnotation] = defaultClusterIssuer
 	}
 	return out
 }
@@ -140,7 +136,7 @@ func buildListenerSet(ing *netv1.Ingress, opts buildOptions) *gatewayv1ac.Listen
 
 	return gatewayv1ac.ListenerSet(ing.Name, ing.Namespace).
 		WithLabels(managedLabels()).
-		WithAnnotations(listenerSetAnnotations(ing, opts.defaultClusterIssuer)).
+		WithAnnotations(listenerSetAnnotations(ing)).
 		WithOwnerReferences(ownerReference(ing)).
 		WithSpec(gatewayv1ac.ListenerSetSpec().
 			WithParentRef(parentRef).
@@ -334,13 +330,6 @@ func coveringTLSHost(ing *netv1.Ingress, host string) (string, bool) {
 	return "", false
 }
 
-// tlsCoversHost reports whether any spec.tls entry of the Ingress covers the
-// given host.
-func tlsCoversHost(ing *netv1.Ingress, host string) bool {
-	_, ok := coveringTLSHost(ing, host)
-	return ok
-}
-
 // sslRedirectEnabled reports whether HTTP traffic for TLS-covered hosts
 // should be redirected to HTTPS. Enabled by default (matching
 // ingress-nginx), disabled via the ssl-redirect annotations.
@@ -467,6 +456,17 @@ func translationWarnings(ing *netv1.Ingress, warnAnnotationPrefixes []string) []
 	}
 	for _, key := range slices.Sorted(maps.Keys(ing.Annotations)) {
 		if handled[key] {
+			continue
+		}
+		// cert-manager triggers on the Ingress conflict with the generated
+		// ListenerSet: cert-manager would manage the same Certificate from
+		// both sides. Point at the rename that moves it to the ListenerSet.
+		if strings.HasPrefix(key, certManagerAnnotationPrefix) {
+			warnings = append(warnings, translationWarning{
+				Reason: "CertManagerAnnotationIgnored",
+				Message: fmt.Sprintf("annotation %q is not copied to the ListenerSet: cert-manager would manage the certificate for both the Ingress and the ListenerSet; rename it to %q to move certificate management to the ListenerSet",
+					key, certManagerSourcePrefix+strings.TrimPrefix(key, certManagerAnnotationPrefix)),
+			})
 			continue
 		}
 		for _, prefix := range warnAnnotationPrefixes {

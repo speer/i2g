@@ -10,7 +10,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	netv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 	"k8s.io/client-go/tools/record"
@@ -41,14 +40,12 @@ const (
 // Gateway API ListenerSets and HTTPRoutes.
 type IngressReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
 	IngressClass           string
 	NamespaceSelector      labels.Selector
 	GatewayName            string
 	GatewayNamespace       string
-	DefaultClusterIssuer   string
 	ListenerHTTPSPort      int32
 	ListenerHTTPPort       int32
 	UpdateIngressStatus    bool
@@ -101,11 +98,10 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	opts := buildOptions{
-		gatewayName:          r.GatewayName,
-		gatewayNamespace:     r.GatewayNamespace,
-		httpsPort:            r.ListenerHTTPSPort,
-		httpPort:             r.ListenerHTTPPort,
-		defaultClusterIssuer: r.DefaultClusterIssuer,
+		gatewayName:      r.GatewayName,
+		gatewayNamespace: r.GatewayNamespace,
+		httpsPort:        r.ListenerHTTPSPort,
+		httpPort:         r.ListenerHTTPPort,
 	}
 
 	routes, err := buildHTTPRoutes(ctx, ing, opts, r.resolveBackendPort)

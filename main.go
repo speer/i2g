@@ -59,7 +59,6 @@ func main() {
 		watchNamespaces        string
 		gatewayName            string
 		gatewayNamespace       string
-		defaultClusterIssuer   string
 		listenerHTTPSPort      int
 		listenerHTTPPort       int
 		updateIngressStatus    bool
@@ -84,9 +83,6 @@ func main() {
 		"Name of the Gateway the generated ListenerSets attach to. Required.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "",
 		"Namespace of the Gateway. If empty, the Gateway is assumed to live in the same namespace as the Ingress.")
-	flag.StringVar(&defaultClusterIssuer, "default-cluster-issuer", "",
-		"Value for the cert-manager.io/cluster-issuer annotation on generated ListenerSets when the Ingress "+
-			"carries kubernetes.io/tls-acme=\"true\" but no cert-manager issuer annotation.")
 	flag.IntVar(&listenerHTTPSPort, "listener-https-port", 443,
 		"Port the generated HTTPS listeners bind to.")
 	flag.IntVar(&listenerHTTPPort, "listener-http-port", 80,
@@ -208,13 +204,11 @@ func main() {
 
 	r := &controller.IngressReconciler{
 		Client:                 mgr.GetClient(),
-		Scheme:                 mgr.GetScheme(),
 		Recorder:               mgr.GetEventRecorderFor("ingress2gateway"),
 		IngressClass:           ingressClass,
 		NamespaceSelector:      nsSelector,
 		GatewayName:            gatewayName,
 		GatewayNamespace:       gatewayNamespace,
-		DefaultClusterIssuer:   defaultClusterIssuer,
 		ListenerHTTPSPort:      int32(listenerHTTPSPort),
 		ListenerHTTPPort:       int32(listenerHTTPPort),
 		UpdateIngressStatus:    updateIngressStatus,

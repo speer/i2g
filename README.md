@@ -51,7 +51,6 @@ fields it sets and converges drift automatically.
 | `--watch-namespaces` | no | all namespaces | Comma-separated list of namespaces to watch/reconcile. Allows running with purely namespaced RBAC — in this mode the controller never reads Namespace objects. Mutually exclusive with `--namespace-selector`. |
 | `--gateway-name` | yes | – | Name of the Gateway the ListenerSets attach to and the HTTPRoutes reference as parent. |
 | `--gateway-namespace` | no | Ingress namespace | Namespace of that Gateway. |
-| `--default-cluster-issuer` | no | – | Value for `cert-manager.io/cluster-issuer` on the ListenerSet when the Ingress has `kubernetes.io/tls-acme: "true"` but no issuer annotation. |
 | `--warn-annotation-prefixes` | no | `nginx.ingress.kubernetes.io/,ingress.kubernetes.io/` | Comma-separated annotation prefixes that carried traffic semantics for the previous ingress controller. Untranslated annotations with these prefixes raise a warning Event on the Ingress. Empty disables the warnings. |
 | `--update-ingress-status` | no | `false` | Mirror the Gateway's `status.addresses` into `status.loadBalancer` of reconciled Ingresses so consumers like external-dns and `kubectl get ingress` keep working. Enable only once the original ingress controller no longer manages the Ingresses — two controllers writing the status fight each other. |
 | `--listener-https-port` | no | `443` | Port of the generated HTTPS listeners. |
@@ -68,8 +67,7 @@ Example:
 i2g --ingress-class=nginx \
     --namespace-selector='migrate-to-gateway=true' \
     --gateway-name=shared-gateway \
-    --gateway-namespace=infra \
-    --default-cluster-issuer=letsencrypt-prod
+    --gateway-namespace=infra
 ```
 
 ## Translation
@@ -83,8 +81,8 @@ metadata:
   name: shop
   namespace: team-a
   annotations:
-    cert-manager.io/common-name: shop.example.com
-    kubernetes.io/tls-acme: "true"
+    cert-manager.i2g.dev/cluster-issuer: letsencrypt-prod   # becomes cert-manager.io/cluster-issuer
+    cert-manager.i2g.dev/common-name: shop.example.com
 spec:
   ingressClassName: nginx
   tls:
@@ -112,8 +110,8 @@ metadata:
   name: shop                       # same name/namespace as the Ingress
   namespace: team-a
   annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
     cert-manager.io/common-name: shop.example.com
-    cert-manager.io/cluster-issuer: letsencrypt-prod   # from --default-cluster-issuer
   labels:
     app.kubernetes.io/managed-by: ingress2gateway
 spec:
@@ -219,11 +217,19 @@ spec:
   specific hostnames and paths, and within the shared catch-all route the
   rule is appended last, so all explicit rules win — mirroring Ingress
   default-backend semantics.
-- **cert-manager annotations**: every `cert-manager.io/*` annotation of the
-  Ingress is copied to the ListenerSet. If neither
-  `cert-manager.io/cluster-issuer` nor `cert-manager.io/issuer` is present but
-  `kubernetes.io/tls-acme: "true"` is, `cert-manager.io/cluster-issuer` is set
-  to `--default-cluster-issuer`. No other annotations or labels are copied.
+- **cert-manager annotations**: annotations prefixed `cert-manager.i2g.dev/`
+  are written to the ListenerSet as `cert-manager.io/` annotations
+  (`cert-manager.i2g.dev/cluster-issuer` → `cert-manager.io/cluster-issuer`,
+  …). Plain `cert-manager.io/*` annotations are deliberately **not** copied:
+  cert-manager's ingress-shim acts on them on the Ingress, and copying them
+  would make cert-manager manage the same Certificate from both the Ingress
+  and the ListenerSet (a warning Event with the rename hint is raised
+  instead). Renaming the annotation on the Ingress is therefore the
+  per-Ingress certificate cutover: ingress-shim removes its Ingress-owned
+  Certificate and cert-manager re-creates it owned by the ListenerSet.
+  `kubernetes.io/tls-acme` is ignored entirely — set
+  `cert-manager.i2g.dev/cluster-issuer` explicitly instead. No other
+  annotations or labels are copied.
 - **Feedback on skipped constructs**: anything the translation drops —
   non-Service backends, TLS entries without `secretName`, rules without an
   `http` section, and untranslated annotations under the
@@ -288,14 +294,21 @@ controller; nothing is removed from it and the Ingresses are never modified
    Ingress relying on behavior the translation drops; port those to
    HTTPRoute filters or implementation policies by hand, or exclude the
    Ingress with `i2g.dev/skip: "true"` for now.
-3. **Verify per host** against the Gateway's address (e.g. `curl
+3. **Cut over certificates**: rename `cert-manager.io/*` annotations to
+   `cert-manager.i2g.dev/*` on each Ingress (`CertManagerAnnotationIgnored`
+   events list the affected ones), and replace any `kubernetes.io/tls-acme`
+   with an explicit `cert-manager.i2g.dev/cluster-issuer: <issuer>`. This
+   moves certificate management from the Ingress to the ListenerSet; the
+   Secret keeps its name, so both data planes keep serving the same
+   certificate.
+4. **Verify per host** against the Gateway's address (e.g. `curl
    --resolve`): TLS, redirect, routing, ACME renewals. The generated
    resources' status failures show up as warning Events on the Ingresses.
-4. **Cut over DNS** to the Gateway address. Once the old ingress controller
+5. **Cut over DNS** to the Gateway address. Once the old ingress controller
    no longer serves traffic, enable `--update-ingress-status` so
    external-dns and `kubectl get ingress` follow the Gateway, then
    decommission the old controller.
-5. Widen `--namespace-selector` and repeat. Eventually, replace the
+6. Widen `--namespace-selector` and repeat. Eventually, replace the
    Ingresses with native HTTPRoutes at your own pace — deleting an Ingress
    garbage-collects its generated resources.
 
@@ -312,8 +325,7 @@ helm install i2g oci://ghcr.io/speer/charts/i2g \
   --namespace i2g-system --create-namespace \
   --set controller.ingressClass=nginx \
   --set controller.gatewayName=shared-gateway \
-  --set controller.gatewayNamespace=infra \
-  --set controller.defaultClusterIssuer=letsencrypt-prod
+  --set controller.gatewayNamespace=infra
 ```
 
 `controller.gatewayName` is required; see

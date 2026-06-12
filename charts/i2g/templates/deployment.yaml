@@ -55,9 +55,6 @@ spec:
             {{- with .Values.controller.gatewayNamespace }}
             - --gateway-namespace={{ . }}
             {{- end }}
-            {{- with .Values.controller.defaultClusterIssuer }}
-            - --default-cluster-issuer={{ . }}
-            {{- end }}
             - --listener-https-port={{ .Values.controller.listenerHttpsPort }}
             - --listener-http-port={{ .Values.controller.listenerHttpPort }}
             {{- with .Values.controller.warnAnnotationPrefixes }}
