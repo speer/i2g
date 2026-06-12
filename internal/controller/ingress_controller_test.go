@@ -32,15 +32,31 @@ func TestGatewayStatusWarnings(t *testing.T) {
 			}},
 		},
 	}
+	gatewayKind := gatewayv1.Kind("Gateway")
+	listenerSetRef := gatewayv1.ParentReference{Kind: &kind, Name: "shop", SectionName: &section}
 	routes := []*gatewayv1.HTTPRoute{{
 		ObjectMeta: metav1.ObjectMeta{Name: "shop-shop-example-com-abc"},
-		Status: gatewayv1.HTTPRouteStatus{RouteStatus: gatewayv1.RouteStatus{Parents: []gatewayv1.RouteParentStatus{{
-			ParentRef: gatewayv1.ParentReference{Kind: &kind, Name: "shop", SectionName: &section},
-			Conditions: []metav1.Condition{
-				{Type: "Accepted", Status: metav1.ConditionFalse, Reason: "NoMatchingParent", Message: "no listener https-x"},
-				{Type: "ResolvedRefs", Status: metav1.ConditionTrue}, // healthy: no warning
+		Spec: gatewayv1.HTTPRouteSpec{CommonRouteSpec: gatewayv1.CommonRouteSpec{
+			ParentRefs: []gatewayv1.ParentReference{listenerSetRef},
+		}},
+		Status: gatewayv1.HTTPRouteStatus{RouteStatus: gatewayv1.RouteStatus{Parents: []gatewayv1.RouteParentStatus{
+			{
+				ParentRef: listenerSetRef,
+				Conditions: []metav1.Condition{
+					{Type: "Accepted", Status: metav1.ConditionFalse, Reason: "NoMatchingParent", Message: "no listener https-x"},
+					{Type: "ResolvedRefs", Status: metav1.ConditionTrue}, // healthy: no warning
+				},
 			},
-		}}}},
+			{
+				// Stale entry for a parent no longer in spec.parentRefs
+				// (e.g. after the route was re-applied without it): the
+				// implementation prunes it asynchronously; never warn.
+				ParentRef: gatewayv1.ParentReference{Kind: &gatewayKind, Name: "old-gateway"},
+				Conditions: []metav1.Condition{
+					{Type: "Accepted", Status: metav1.ConditionFalse, Reason: "NotAllowedByListeners", Message: "stale"},
+				},
+			},
+		}}},
 	}}
 
 	got := gatewayStatusWarnings(listenerSet, routes)

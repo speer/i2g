@@ -217,6 +217,11 @@ func gatewayStatusWarnings(listenerSet *gatewayv1.ListenerSet, routes []*gateway
 
 	for _, route := range routes {
 		for _, parent := range route.Status.Parents {
+			// Skip stale status entries for parents the route no longer
+			// references; implementations prune them asynchronously.
+			if !specHasParentRef(route, parent.ParentRef) {
+				continue
+			}
 			for _, c := range parent.Conditions {
 				if (c.Type == "Accepted" || c.Type == "ResolvedRefs") && c.Status == metav1.ConditionFalse {
 					warnings = append(warnings, translationWarning{
@@ -228,6 +233,18 @@ func gatewayStatusWarnings(listenerSet *gatewayv1.ListenerSet, routes []*gateway
 		}
 	}
 	return warnings
+}
+
+// specHasParentRef reports whether the route still references the given
+// parent. Status entries copy the spec's ParentReference verbatim, so plain
+// equality suffices.
+func specHasParentRef(route *gatewayv1.HTTPRoute, ref gatewayv1.ParentReference) bool {
+	for _, specRef := range route.Spec.ParentRefs {
+		if reflect.DeepEqual(specRef, ref) {
+			return true
+		}
+	}
+	return false
 }
 
 func parentRefDescription(ref gatewayv1.ParentReference) string {

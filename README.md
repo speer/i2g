@@ -249,6 +249,8 @@ spec:
   hostname/listener mismatch, backend Service gone). This catches
   "translated but not actually serving". `Unknown` conditions are ignored;
   they only mean the implementation has not processed the resource yet.
+  Stale status entries for parents a route no longer references are also
+  ignored — implementations prune them asynchronously.
 - **Opting out**: annotate an Ingress with `i2g.dev/skip: "true"` to exclude
   it from translation; previously generated resources (and, with
   `--update-ingress-status`, the controller's status ownership) are cleaned
