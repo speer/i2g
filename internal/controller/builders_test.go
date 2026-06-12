@@ -221,12 +221,12 @@ func TestBuildHTTPRoutes(t *testing.T) {
 	if b := rules[1].BackendRefs[0]; string(*b.Name) != "api" || *b.Port != 9090 {
 		t.Errorf("rule 1 backend = %v:%v, want api:9090 (named port resolved)", *b.Name, *b.Port)
 	}
-	// TLS host: attached to Gateway and, pinned to the HTTPS listener, the
-	// ListenerSet (the HTTP listener is served by the redirect route).
-	if len(shop.Spec.ParentRefs) != 2 {
-		t.Fatalf("expected 2 parentRefs for TLS host, got %d", len(shop.Spec.ParentRefs))
+	// TLS host: attached only to the ListenerSet, pinned to the HTTPS
+	// listener (the HTTP listener is served by the redirect route).
+	if len(shop.Spec.ParentRefs) != 1 {
+		t.Fatalf("expected 1 parentRef for TLS host, got %d", len(shop.Spec.ParentRefs))
 	}
-	lsRef := shop.Spec.ParentRefs[1]
+	lsRef := shop.Spec.ParentRefs[0]
 	if string(*lsRef.Kind) != "ListenerSet" || string(*lsRef.Name) != "shop" {
 		t.Errorf("parentRef 1 = %+v, want ListenerSet shop", lsRef)
 	}
@@ -314,8 +314,8 @@ func TestBuildHTTPRoutesSSLRedirectDisabled(t *testing.T) {
 	}
 	// Without a redirect the app route attaches to the whole ListenerSet,
 	// serving both HTTP and HTTPS.
-	if ref := routes[0].Spec.ParentRefs[1]; ref.SectionName != nil {
-		t.Errorf("expected no sectionName, got %v", *ref.SectionName)
+	if ref := routes[0].Spec.ParentRefs[0]; string(*ref.Kind) != "ListenerSet" || ref.SectionName != nil {
+		t.Errorf("expected ListenerSet ref without sectionName, got %+v", ref)
 	}
 }
 
@@ -342,7 +342,7 @@ func TestBuildHTTPRoutesSSLRedirectWildcardAndCustomPort(t *testing.T) {
 	}
 	// The section names must reference the wildcard TLS host's listeners,
 	// not the rule host's.
-	if ref := routes[0].Spec.ParentRefs[1]; *ref.SectionName != listenerName("https", "*.example.com") {
+	if ref := routes[0].Spec.ParentRefs[0]; *ref.SectionName != listenerName("https", "*.example.com") {
 		t.Errorf("app sectionName = %v, want wildcard HTTPS listener", *ref.SectionName)
 	}
 	if ref := routes[1].Spec.ParentRefs[0]; *ref.SectionName != listenerName("http", "*.example.com") {

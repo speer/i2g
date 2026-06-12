@@ -143,13 +143,9 @@ metadata:
     app.kubernetes.io/managed-by: ingress2gateway
 spec:
   parentRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: shared-gateway
-      namespace: infra
-    - group: gateway.networking.k8s.io   # added because spec.tls covers the host;
-      kind: ListenerSet                  # pinned to the HTTPS listener because of
-      name: shop                         # the default HTTPS redirect
+    - group: gateway.networking.k8s.io   # spec.tls covers the host, so the route
+      kind: ListenerSet                  # attaches to the ListenerSet; pinned to the
+      name: shop                         # HTTPS listener by the default HTTPS redirect.
       sectionName: https-shop-example-com-<hash>
   hostnames: [shop.example.com]
   rules:
@@ -200,9 +196,15 @@ spec:
 - **TLS**: one HTTPS listener plus one plain HTTP listener (so e.g. ACME
   HTTP-01 challenges can succeed) per host of each `spec.tls` entry; an entry
   without hosts becomes a catch-all listener pair (no `hostname`). Entries
-  without `secretName` are skipped. HTTPRoutes for hosts covered by TLS
-  (exact or single-label wildcard match) additionally attach to the
-  ListenerSet.
+  without `secretName` are skipped.
+- **Route attachment**: HTTPRoutes for hosts covered by TLS (exact or
+  single-label wildcard match) attach to the generated ListenerSet — its
+  exact-host listeners win listener selection over the Gateway's shared
+  listeners anyway, and a Gateway attachment would only produce rejected
+  parent statuses on Gateways that admit ListenerSets but not routes from
+  app namespaces. Hosts without TLS attach to the configured Gateway and
+  are served by its shared listeners (which therefore must allow routes
+  from the app namespaces, see Requirements).
 - **HTTPS redirect**: hosts covered by `spec.tls` answer plain HTTP with a
   permanent (308) redirect to HTTPS, like ingress-nginx: the app route is
   pinned to the host's HTTPS listener (`sectionName`) and a separate

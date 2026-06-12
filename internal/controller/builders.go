@@ -265,32 +265,34 @@ func buildRedirectRoute(ing *netv1.Ingress, host, tlsHost string, opts buildOpti
 		WithSpec(spec)
 }
 
-// routeParentRefs returns the parents the app HTTPRoute attaches to: always
-// the configured Gateway, and additionally the generated ListenerSet when
-// the Ingress terminates TLS for the host. With an HTTPS redirect in place
-// the ListenerSet attachment is pinned to the HTTPS listener so that plain
-// HTTP is left to the redirect route.
+// routeParentRefs returns the parent the app HTTPRoute attaches to. Hosts
+// the Ingress terminates TLS for attach to the generated ListenerSet — its
+// exact-host listeners win listener selection over the Gateway's shared
+// listeners anyway, and a Gateway attachment would only produce rejected
+// parent statuses on Gateways that admit ListenerSets but not foreign
+// routes. With an HTTPS redirect in place the attachment is pinned to the
+// HTTPS listener so that plain HTTP is left to the redirect route. Hosts
+// without TLS are served by the Gateway's shared listeners instead.
 func routeParentRefs(ing *netv1.Ingress, tlsHost string, tlsCovered, redirect bool, opts buildOptions) []*gatewayv1ac.ParentReferenceApplyConfiguration {
-	gatewayRef := gatewayv1ac.ParentReference().
-		WithGroup(gatewayGroup).
-		WithKind("Gateway").
-		WithName(gatewayv1.ObjectName(opts.gatewayName))
-	if opts.gatewayNamespace != "" {
-		gatewayRef = gatewayRef.WithNamespace(gatewayv1.Namespace(opts.gatewayNamespace))
-	}
-	refs := []*gatewayv1ac.ParentReferenceApplyConfiguration{gatewayRef}
-
-	if tlsCovered {
-		listenerSetRef := gatewayv1ac.ParentReference().
+	if !tlsCovered {
+		gatewayRef := gatewayv1ac.ParentReference().
 			WithGroup(gatewayGroup).
-			WithKind("ListenerSet").
-			WithName(gatewayv1.ObjectName(ing.Name))
-		if redirect {
-			listenerSetRef = listenerSetRef.WithSectionName(listenerName("https", tlsHost))
+			WithKind("Gateway").
+			WithName(gatewayv1.ObjectName(opts.gatewayName))
+		if opts.gatewayNamespace != "" {
+			gatewayRef = gatewayRef.WithNamespace(gatewayv1.Namespace(opts.gatewayNamespace))
 		}
-		refs = append(refs, listenerSetRef)
+		return []*gatewayv1ac.ParentReferenceApplyConfiguration{gatewayRef}
 	}
-	return refs
+
+	listenerSetRef := gatewayv1ac.ParentReference().
+		WithGroup(gatewayGroup).
+		WithKind("ListenerSet").
+		WithName(gatewayv1.ObjectName(ing.Name))
+	if redirect {
+		listenerSetRef = listenerSetRef.WithSectionName(listenerName("https", tlsHost))
+	}
+	return []*gatewayv1ac.ParentReferenceApplyConfiguration{listenerSetRef}
 }
 
 // coveringTLSHost returns the spec.tls host entry covering the given rule
