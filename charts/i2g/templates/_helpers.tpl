@@ -49,6 +49,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Name for cluster-scoped resources and resources created outside the release
+namespace. Includes the release namespace: Helm release names are only
+unique per namespace, so the fullname alone could collide between two
+installations of the chart in different namespaces.
+*/}}
+{{- define "i2g.clusterScopedName" -}}
+{{- printf "%s-%s" (include "i2g.fullname" .) .Release.Namespace | trunc 253 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Effective watch namespaces as a comma-joined string. Empty means watching all
 namespaces. Defaults to the release namespace in namespaced RBAC mode and
 enforces mutual exclusion with the namespace selector.

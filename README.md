@@ -335,6 +335,14 @@ helm install i2g oci://ghcr.io/speer/charts/i2g \
 listener ports, leader election, metrics, resources, …). RBAC and the
 ServiceAccount are created by the chart.
 
+The chart can be installed **multiple times per cluster** (e.g. one instance
+per Gateway or IngressClass): cluster-scoped resources and resources created
+outside the release namespace are suffixed with the release namespace, and
+the leader election lease is named per release. Make sure the instances
+select disjoint sets of Ingresses (different `controller.ingressClass`
+values or non-overlapping namespaces) — two instances translating the same
+Ingress would fight over the generated resources.
+
 By default the controller gets cluster-wide permissions. With
 `rbac.namespaced=true` no cluster-wide permissions are granted at all: a
 Role/RoleBinding is created in every watched namespace

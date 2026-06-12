@@ -66,6 +66,7 @@ func main() {
 		metricsAddr            string
 		probeAddr              string
 		enableLeaderElection   bool
+		leaderElectionID       string
 	)
 
 	flag.StringVar(&ingressClass, "ingress-class", "",
@@ -102,6 +103,9 @@ func main() {
 		"Address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager.")
+	flag.StringVar(&leaderElectionID, "leader-election-id", "ingress2gateway.i2g.dev",
+		"Name of the leader election Lease. Must differ between controller instances deployed "+
+			"to the same namespace.")
 
 	zapOpts := zap.Options{}
 	zapOpts.BindFlags(flag.CommandLine)
@@ -149,7 +153,7 @@ func main() {
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "ingress2gateway.i2g.dev",
+		LeaderElectionID:       leaderElectionID,
 	}
 	if watchNamespaces != "" {
 		// Restrict the cache so the controller works with namespaced RBAC.

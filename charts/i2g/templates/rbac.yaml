@@ -3,7 +3,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "i2g.fullname" . }}
+  name: {{ include "i2g.clusterScopedName" . }}
   labels:
     {{- include "i2g.labels" . | nindent 4 }}
 rules:
@@ -29,13 +29,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "i2g.fullname" . }}
+  name: {{ include "i2g.clusterScopedName" . }}
   labels:
     {{- include "i2g.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "i2g.fullname" . }}
+  name: {{ include "i2g.clusterScopedName" . }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "i2g.serviceAccountName" . }}
@@ -51,7 +51,7 @@ mode since the namespace selector is excluded by the watchNamespaces helper.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "i2g.fullname" $ }}
+  name: {{ include "i2g.clusterScopedName" $ }}
   namespace: {{ $namespace }}
   labels:
     {{- include "i2g.labels" $ | nindent 4 }}
@@ -78,14 +78,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "i2g.fullname" $ }}
+  name: {{ include "i2g.clusterScopedName" $ }}
   namespace: {{ $namespace }}
   labels:
     {{- include "i2g.labels" $ | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "i2g.fullname" $ }}
+  name: {{ include "i2g.clusterScopedName" $ }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "i2g.serviceAccountName" $ }}
@@ -101,7 +101,7 @@ namespaces; grant read access there separately in that case.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "i2g.fullname" . }}-gateway
+  name: {{ include "i2g.clusterScopedName" . }}-gateway
   namespace: {{ .Values.controller.gatewayNamespace }}
   labels:
     {{- include "i2g.labels" . | nindent 4 }}
@@ -113,14 +113,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "i2g.fullname" . }}-gateway
+  name: {{ include "i2g.clusterScopedName" . }}-gateway
   namespace: {{ .Values.controller.gatewayNamespace }}
   labels:
     {{- include "i2g.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "i2g.fullname" . }}-gateway
+  name: {{ include "i2g.clusterScopedName" . }}-gateway
 subjects:
   - kind: ServiceAccount
     name: {{ include "i2g.serviceAccountName" . }}

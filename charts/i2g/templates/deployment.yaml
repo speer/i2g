@@ -65,6 +65,7 @@ spec:
             {{- end }}
             {{- if .Values.controller.leaderElection }}
             - --leader-elect
+            - --leader-election-id={{ include "i2g.fullname" . }}
             {{- end }}
             - --health-probe-bind-address=:8081
             - --metrics-bind-address={{ if .Values.metrics.enabled }}:{{ .Values.metrics.port }}{{ else }}0{{ end }}
