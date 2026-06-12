@@ -52,6 +52,16 @@ controller:
   # Additional command line arguments.
   extraArgs: []
 
+ingressClass:
+  # Create an IngressClass named controller.ingressClass. Off by default:
+  # when migrating, the class usually already exists (owned by the previous
+  # ingress controller); enable this when Ingresses should newly target this
+  # controller and no IngressClass exists yet.
+  create: false
+  # Value of the mandatory spec.controller field. Informational for i2g —
+  # it matches Ingresses by class name, not by controller string.
+  controller: i2g.dev/ingress2gateway
+
 serviceAccount:
   create: true
   # Defaults to the fullname of the release.

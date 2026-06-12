@@ -1,0 +1,13 @@
+{{- if .Values.ingressClass.create }}
+{{- if not .Values.controller.ingressClass }}
+{{- fail "ingressClass.create requires controller.ingressClass to be set" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ .Values.controller.ingressClass }}
+  labels:
+    {{- include "i2g.labels" . | nindent 4 }}
+spec:
+  controller: {{ .Values.ingressClass.controller }}
+{{- end }}
